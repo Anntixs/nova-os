@@ -14,6 +14,7 @@ KERNEL_FEATURES=()
 if [[ "${NOVA_SELFTEST:-0}" == "1" ]]; then KERNEL_FEATURES+=(--features selftest); fi
 if [[ "${NOVA_EXCEPTIONTEST:-0}" == "1" ]]; then KERNEL_FEATURES+=(--features exceptiontest); fi
 if [[ "${NOVA_MONITOR:-0}" == "1" ]]; then KERNEL_FEATURES+=(--features monitor); fi
+if [[ "${NOVA_SMPTEST:-0}" == "1" ]]; then KERNEL_FEATURES+=(--features smptest); fi
 RUSTFLAGS="${RUSTFLAGS:-} -C relocation-model=static -C code-model=large -C link-arg=-T$ROOT/userspace/hello/linker.ld" cargo build "${PROFILE_ARG[@]}" -p nova-user-programs --target x86_64-unknown-none
 mkdir -p build/userspace
 for program in sleeptest maptest spawntest filetest hello exit42 badmem badopcode yieldtest invalidptr invalidsys badpriv badcodewrite badstackexec badkernel; do

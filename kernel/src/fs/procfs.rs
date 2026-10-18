@@ -25,7 +25,15 @@ fn content(path:&str)->Result<Vec<u8>,vfs::Error> {
   "/cpuinfo"=>{let cpu=crate::arch::x86_64::cpuid::detect();
    let vendor=core::str::from_utf8(&cpu.vendor).unwrap_or("Unavailable");
    let brand=core::str::from_utf8(&cpu.brand).unwrap_or("Unavailable").trim_end_matches('\0').trim();
-   Ok(format!("Vendor: {}\nBrand: {}\nFamily: {}\nModel: {}\nStepping: {}\nActiveNovaCPUs: 1\n",vendor,brand,cpu.family,cpu.model,cpu.stepping).into_bytes())
+   use crate::arch::x86_64::percpu as local;
+   let mut text=format!("Vendor: {}\nBrand: {}\nFamily: {}\nModel: {}\nStepping: {}\nDiscoveredCPUs: {}\nEnteredNovaCode: {}\nSchedulerCPUs: 1\nActiveNovaCPUs: 1\n",vendor,brand,cpu.family,cpu.model,cpu.stepping,local::discovered(),local::entered());
+   for logical in 0..local::discovered().min(8) as usize {
+    if let (Some(id),Some(state))=(local::apic_id(logical),local::state(logical)) {
+     use core::fmt::Write;
+     let _=writeln!(text,"CPU{}: APIC {} {:?}",logical,id,state);
+    }
+   }
+   Ok(text.into_bytes())
   },
   _=>{let Some((pid,false))=pid_from(path)else{return Err(not_found())};
    let Some((_,state,name,parent))=crate::process::list().into_iter().find(|p|p.0.0==pid)else{return Err(not_found())};

@@ -17,7 +17,7 @@ cp "$OVMF_VARS" "$ROOT/build/OVMF_VARS.fd"
 export TMPDIR="$ROOT/build"
 QEMU_DATA_ARGS=()
 if [[ -n "${NOVA_QEMU_DATADIR:-}" ]]; then QEMU_DATA_ARGS=(-L "$NOVA_QEMU_DATADIR"); fi
-exec "$QEMU_BIN" "${QEMU_DATA_ARGS[@]}" -machine q35 -m "${NOVA_RAM:-256M}" -cpu qemu64 -smp 1 \
+exec "$QEMU_BIN" "${QEMU_DATA_ARGS[@]}" -machine q35 -m "${NOVA_RAM:-256M}" -cpu qemu64 -smp "${NOVA_SMP:-1}" \
   -drive "if=pflash,format=raw,readonly=on,file=$OVMF_CODE" \
   -drive "if=pflash,format=raw,file=$ROOT/build/OVMF_VARS.fd" \
   -drive "format=raw,file=fat:rw:$ROOT/build/esp" \

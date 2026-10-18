@@ -19,6 +19,7 @@ mod logging;
 mod memory;
 mod shell;
 extern crate alloc;
+mod platform;
 mod process;
 mod scheduler;
 mod syscall;
@@ -246,8 +247,17 @@ pub extern "sysv64" fn _start(info: *const NovaBootInfo) -> ! {
     scheduler::selftest();
     #[cfg(feature = "selftest")]
     memory::selftest::run(info);
-    arch::x86_64::apic::init(info, cpu_info.features)
+    let topology=platform::acpi::discover(info).unwrap_or_else(|e|panic!("ACPI topology: {:?}",e));
+    arch::x86_64::percpu::set_discovered(topology.processor_count);
+    nova_log!(Info,"ACPI","MADT discovered {} enabled xAPIC processors; {} online",topology.processor_count,1);
+    for processor in topology.processors[..topology.processor_count].iter() {
+        let Some(processor)=processor else {continue};
+        nova_log!(Info,"ACPI","processor ACPI ID {} APIC ID {}",processor.acpi_id,processor.apic_id);
+    }
+    arch::x86_64::apic::init(&topology, cpu_info.features)
         .unwrap_or_else(|_| panic!("APIC initialization failed"));
+    arch::x86_64::percpu::init_current(0,arch::x86_64::apic::local_id() as u32,0);
+    arch::x86_64::percpu::set_state(0,arch::x86_64::percpu::State::Running);
     nova_log!(Info, "INT", "Local APIC and IOAPIC initialized");
     interrupts::timer::init();
     nova_log!(Info, "TIME", "PIT timer initialized");
@@ -255,6 +265,9 @@ pub extern "sysv64" fn _start(info: *const NovaBootInfo) -> ! {
     nova_log!(Info, "INPUT", "PS/2 keyboard initialized");
     tty::init();
     nova_log!(Info,"TTY","terminal input initialized");
+    cpu::enable_interrupts();
+    arch::x86_64::smp::probe(&topology,info.ap_trampoline);
+    cpu::disable_interrupts();
     fill(f, 0x10131b);
     let white = 0xe5e9f0;
     let blue = 0x6ba8e8;

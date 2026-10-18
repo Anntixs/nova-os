@@ -4,7 +4,7 @@ use crate::{
     thread::{context::Context, Thread, ThreadId, ThreadState},
 };
 use alloc::{boxed::Box, collections::VecDeque, vec::Vec};
-use core::cell::UnsafeCell;
+use core::{cell::UnsafeCell,sync::atomic::{AtomicBool,Ordering}};
 
 struct Scheduler {
     host: Context,
@@ -14,11 +14,11 @@ struct Scheduler {
     current: Option<usize>,
     next_tid: u64,
 }
-struct Cell(UnsafeCell<Option<Scheduler>>);
-// SAFETY: Nova currently runs one CPU. Every scheduler mutation occurs with IRQs
-// disabled; SMP startup must replace this with a proper CPU-local lock.
+struct Cell(UnsafeCell<Option<Scheduler>>,AtomicBool);
+// SAFETY: the atomic lock and local IRQ masking serialize all scheduler state.
+// The host/current context is still BSP-only, so APs cannot schedule yet.
 unsafe impl Sync for Cell {}
-static SCHED: Cell = Cell(UnsafeCell::new(None));
+static SCHED: Cell = Cell(UnsafeCell::new(None),AtomicBool::new(false));
 
 #[cfg(feature = "selftest")]
 static TEST_STEP: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
@@ -59,12 +59,14 @@ pub fn selftest() {
 fn with_sched<R>(f: impl FnOnce(&mut Scheduler) -> R) -> R {
     let enabled = cpu::interrupts_enabled();
     cpu::disable_interrupts();
-    // SAFETY: only the bootstrap CPU accesses this cell; IRQs cannot reenter here.
+    while SCHED.1.compare_exchange(false,true,Ordering::Acquire,Ordering::Relaxed).is_err(){core::hint::spin_loop()}
+    // SAFETY: atomic lock excludes other CPUs and local IRQs cannot reenter.
     let result = f(unsafe {
         (*SCHED.0.get())
             .as_mut()
             .expect("scheduler not initialized")
     });
+    SCHED.1.store(false,Ordering::Release);
     if enabled {
         cpu::enable_interrupts();
     }
@@ -114,9 +116,12 @@ pub fn current_tid()->Option<ThreadId>{with_sched(|s|{
 })}
 pub fn try_current_tid()->Option<ThreadId>{
  let enabled=cpu::interrupts_enabled();cpu::disable_interrupts();
- // SAFETY: BSP-only read under IF clear; scheduler may not exist during
- // bootstrap faults, so the optional state is checked before dereference.
+ if SCHED.1.compare_exchange(false,true,Ordering::Acquire,Ordering::Relaxed).is_err(){
+  if enabled{cpu::enable_interrupts()}return None
+ }
+ // SAFETY: lock excludes writers; scheduler may not exist during bootstrap.
  let tid=unsafe{(*SCHED.0.get()).as_ref().and_then(|s|s.current.and_then(|i|s.threads.get(i)?.as_ref().map(|t|t.tid)))};
+ SCHED.1.store(false,Ordering::Release);
  if enabled{cpu::enable_interrupts()}tid
 }
 pub fn other_live_threads(pid:ProcessId)->bool{with_sched(|s|{

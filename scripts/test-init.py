@@ -28,7 +28,7 @@ log.write_text("")
 cmd = [QEMU]
 if os.environ.get("NOVA_QEMU_DATADIR"):
     cmd += ["-L", os.environ["NOVA_QEMU_DATADIR"]]
-cmd += ["-machine", "q35", "-m", os.environ.get("NOVA_RAM", "256M"), "-cpu", "qemu64", "-smp", "1",
+cmd += ["-machine", "q35", "-m", os.environ.get("NOVA_RAM", "256M"), "-cpu", "qemu64", "-smp", os.environ.get("NOVA_SMP", "1"),
         "-drive", f"if=pflash,format=raw,readonly=on,file={CODE}",
         "-drive", f"if=pflash,format=raw,file={BUILD / 'OVMF_VARS.fd'}",
         "-drive", f"format=raw,file=fat:rw:{BUILD / 'esp'}",
@@ -62,7 +62,7 @@ try:
     wait_for("nova:/$ ")
     proc.stdin.write(f"screendump {BUILD / 'nova-boot.ppm'}\n".encode())
     proc.stdin.flush()
-    commands = ("pwd", "ls /", "ls /dev", "ls /proc", "cat /proc/uptime", "sysinfo", "ps", "uptime", "dmesg", "env", "devtest", "fbtest", "cat /etc/version", "hello-c", "malloctest", "memtest", "spawntest-c", "schedtest", "threadtest", "pipetest", "msgtest", "orphantest", "killtest", 'args one two "hello nova"', "cd /bin", "pwd", "./pwd", 'echo "Nova works"', "badmem", "badopcode", "invalidptr", "invalidsys", "syscheck", "hello", "hello-c", "hello-c", "hello-c")
+    commands = ("pwd", "ls /", "ls /dev", "ls /proc", "cat /proc/uptime", "sysinfo", "cpuinfo", "ps", "uptime", "dmesg", "env", "devtest", "fbtest", "cat /etc/version", "hello-c", "malloctest", "memtest", "spawntest-c", "schedtest", "threadtest", "pipetest", "msgtest", "orphantest", "killtest", 'args one two "hello nova"', "cd /bin", "pwd", "./pwd", 'echo "Nova works"', "badmem", "badopcode", "invalidptr", "invalidsys", "syscheck", "hello", "hello-c", "hello-c", "hello-c")
     for command in commands:
         before = log.read_text(errors="replace").count("$ ")
         send(command)
@@ -95,9 +95,25 @@ try:
     expected = ("Nova OS 0.6.0", "launching /system/init as PID 1", "NovaShell (Ring 3)", "null", "zero", "meminfo", "UptimeMilliseconds:", "Nova system information", "PID 1", "Uptime:", "PATH=/bin", "Device test passed. Framebuffer", "Framebuffer test passed.", "Hello from Nova C userspace!", "Malloc test passed.", "Memory test passed. Invalid access isolated.", "C spawn test passed:", "Scheduler test passed.", "Userspace thread test passed.", "Pipe test passed.", "Message channel test passed.", "Orphan test spawned PID", "orphan PID", "Kill test passed.", "Killed PID", "argc = 4", "argv[3] = hello nova", "Nova works", "fault vector 14", "fault vector 6", "Invalid pointer rejected", "Invalid syscall rejected", "Nova stderr works.", "Syscall validation passed.", "Hello from Nova userspace!")
     for marker in expected:
         if marker not in content: raise AssertionError(f"Missing {marker!r} in {log}")
+    requested_cpus = int(os.environ.get("NOVA_SMP", "1"))
+    if f"DiscoveredCPUs: {requested_cpus}" not in content:
+        raise AssertionError("MADT processor count missing from cpuinfo")
+    if requested_cpus > 1:
+        for apic_id in range(1, min(requested_cpus, 8)):
+            marker = f"APIC {apic_id} entered Nova long-mode code"
+            if marker not in content:
+                raise AssertionError(f"Missing real AP startup acknowledgement: {marker}")
+    if os.environ.get("NOVA_SMPTEST") == "1" and requested_cpus > 1:
+        marker = f"SMP allocator stress passed on {min(requested_cpus, 8)-1} APs"
+        if marker not in content:
+            raise AssertionError(f"Missing completed cross-CPU allocator test: {marker}")
     cpu_lines = re.findall(r"(?m)^([AB][123])\r?$", content)
-    if cpu_lines != ["A1", "B1", "A2", "B2", "A3", "B3"]:
-        raise AssertionError(f"CPU-bound children did not interleave as expected: {cpu_lines}")
+    if (len(cpu_lines) != 6 or set(cpu_lines) != {"A1", "A2", "A3", "B1", "B2", "B3"}
+            or not (cpu_lines.index("A1") < cpu_lines.index("A2") < cpu_lines.index("A3"))
+            or not (cpu_lines.index("B1") < cpu_lines.index("B2") < cpu_lines.index("B3"))
+            or not (cpu_lines.index("A1") < cpu_lines.index("B3")
+                    and cpu_lines.index("B1") < cpu_lines.index("A3"))):
+        raise AssertionError(f"CPU-bound children did not overlap correctly: {cpu_lines}")
     if content.count("Hello from Nova C userspace!") != 4:
         raise AssertionError("Repeated C process execution did not complete four times")
     if "--verify-persistence" not in sys.argv:

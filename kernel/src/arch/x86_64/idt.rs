@@ -140,6 +140,13 @@ pub fn init() {
         IDT[32] = Gate::new(&raw const nova_irq_0 as u64, 0);
         IDT[33] = Gate::new(&raw const nova_irq_1 as u64, 0);
         IDT[255] = Gate::new(&raw const nova_irq_spurious as u64, 0);
+    }
+    load();
+}
+pub fn load() {
+    // SAFETY: BSP completed all IDT writes before AP startup. The table remains
+    // immutable afterward, and LIDT changes only the calling CPU's IDTR.
+    unsafe {
         let ptr = Descriptor {
             limit: (core::mem::size_of::<[Gate; 256]>() - 1) as u16,
             base: &raw const IDT as u64,

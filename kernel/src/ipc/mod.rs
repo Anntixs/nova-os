@@ -1,19 +1,26 @@
 //! Single-CPU IPC primitives. Endpoint state is shared with Arc; interrupt
 //! masking protects short queue operations. No user pointer enters this layer.
 use alloc::{collections::VecDeque, sync::Arc, vec::Vec};
-use core::cell::UnsafeCell;
+use core::{cell::UnsafeCell,sync::atomic::{AtomicBool,Ordering}};
 use crate::{arch::x86_64::cpu, process::ProcessId};
 
 const PIPE_CAPACITY: usize = 4096;
 const CHANNEL_CAPACITY: usize = 32;
 const MAX_MESSAGE: usize = 4096;
 
-fn critical<T, R>(cell: &UnsafeCell<T>, f: impl FnOnce(&mut T) -> R) -> R {
+struct Protected<T>{data:UnsafeCell<T>,lock:AtomicBool}
+impl<T> Protected<T>{fn new(data:T)->Self{Self{data:UnsafeCell::new(data),lock:AtomicBool::new(false)}}}
+// SAFETY: every access to the enclosed state acquires the atomic lock with
+// local interrupts masked. The state is Send and no mutable borrow escapes.
+unsafe impl<T:Send> Sync for Protected<T>{}
+fn critical<T, R>(cell: &Protected<T>, f: impl FnOnce(&mut T) -> R) -> R {
     let enabled = cpu::interrupts_enabled();
     cpu::disable_interrupts();
-    // SAFETY: Nova runs one CPU. IRQs cannot reenter while the state is lent;
-    // no caller retains the mutable reference after this closure returns.
-    let result = f(unsafe { &mut *cell.get() });
+    while cell.lock.compare_exchange(false,true,Ordering::Acquire,Ordering::Relaxed).is_err(){core::hint::spin_loop()}
+    // SAFETY: the atomic lock excludes other CPUs; local IRQs cannot reenter
+    // while this unique mutable reference is borrowed.
+    let result = f(unsafe { &mut *cell.data.get() });
+    cell.lock.store(false,Ordering::Release);
     if enabled { cpu::enable_interrupts(); }
     result
 }
@@ -22,9 +29,7 @@ struct PipeState {
     bytes: VecDeque<u8>, readers: usize, writers: usize,
     reading: Vec<ProcessId>, writing: Vec<ProcessId>,
 }
-struct Pipe(UnsafeCell<PipeState>);
-// SAFETY: every PipeState access goes through `critical` on the sole active CPU.
-unsafe impl Sync for Pipe {}
+struct Pipe(Protected<PipeState>);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Direction { Read, Write }
@@ -48,7 +53,7 @@ impl Drop for PipeEnd {
     }
 }
 pub fn pipe() -> (PipeEnd, PipeEnd) {
-    let shared = Arc::new(Pipe(UnsafeCell::new(PipeState {
+    let shared = Arc::new(Pipe(Protected::new(PipeState {
         bytes: VecDeque::new(), readers: 1, writers: 1,
         reading: Vec::new(), writing: Vec::new(),
     })));
@@ -92,13 +97,11 @@ impl PipeEnd {
 }
 
 struct ChannelState { messages: VecDeque<Vec<u8>>, receiving: Vec<ProcessId>, sending: Vec<ProcessId> }
-struct Channel(UnsafeCell<ChannelState>);
-// SAFETY: every ChannelState access goes through `critical` on the sole active CPU.
-unsafe impl Sync for Channel {}
+struct Channel(Protected<ChannelState>);
 #[derive(Clone)]
 pub struct ChannelEnd { channel: Arc<Channel>, nonblocking: bool }
 pub fn channel(nonblocking: bool) -> ChannelEnd {
-    ChannelEnd {channel: Arc::new(Channel(UnsafeCell::new(ChannelState {
+    ChannelEnd {channel: Arc::new(Channel(Protected::new(ChannelState {
         messages: VecDeque::new(), receiving: Vec::new(), sending: Vec::new(),
     }))), nonblocking}
 }

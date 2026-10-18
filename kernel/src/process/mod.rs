@@ -66,7 +66,7 @@ impl Process {
 }
 
 use crate::{arch::x86_64::cpu, terminal::Terminal};
-use core::cell::UnsafeCell;
+use core::{cell::UnsafeCell,sync::atomic::{AtomicBool,Ordering}};
 struct Manager {
     next_pid: u64,
     current: Option<Process>,
@@ -80,19 +80,24 @@ impl Manager {
         self.others.iter_mut().find(|p|p.pid==pid)
     }
 }
-struct Cell(UnsafeCell<Option<Manager>>);
-// SAFETY: only the bootstrap CPU exists; mutations run with interrupts disabled.
+struct Cell(UnsafeCell<Option<Manager>>,AtomicBool);
+// SAFETY: all manager reads/writes use the atomic lock with local IRQs masked.
+// The current-process field still represents the BSP only; AP user scheduling
+// remains disabled until that field becomes CPU-local.
 unsafe impl Sync for Cell {}
-static MANAGER: Cell = Cell(UnsafeCell::new(None));
+static MANAGER: Cell = Cell(UnsafeCell::new(None),AtomicBool::new(false));
 fn with_manager<R>(f: impl FnOnce(&mut Manager) -> R) -> R {
     let enabled = cpu::interrupts_enabled();
     cpu::disable_interrupts();
-    // SAFETY: BSP only; IRQs are masked for the duration of this borrow.
+    while MANAGER.1.compare_exchange(false,true,Ordering::Acquire,Ordering::Relaxed).is_err(){core::hint::spin_loop()}
+    // SAFETY: the atomic lock excludes all other CPUs and local IRQs cannot
+    // reenter while the unique mutable manager reference is borrowed.
     let result = f(unsafe {
         (*MANAGER.0.get())
             .as_mut()
             .expect("process manager not initialized")
     });
+    MANAGER.1.store(false,Ordering::Release);
     if enabled {
         cpu::enable_interrupts();
     }
@@ -144,9 +149,13 @@ pub fn current_pid() -> Option<ProcessId> {
 }
 pub fn try_current_pid()->Option<ProcessId>{
  let enabled=cpu::interrupts_enabled();cpu::disable_interrupts();
- // SAFETY: BSP-only read under IF clear; the optional manager may not yet
- // exist during an early kernel panic or CPU exception.
+ if MANAGER.1.compare_exchange(false,true,Ordering::Acquire,Ordering::Relaxed).is_err(){
+  if enabled{cpu::enable_interrupts()}return None
+ }
+ // SAFETY: the lock excludes writers; the manager may not yet exist during
+ // an early panic or exception.
  let pid=unsafe{(*MANAGER.0.get()).as_ref().and_then(|m|m.current.as_ref().map(|p|p.pid))};
+ MANAGER.1.store(false,Ordering::Release);
  if enabled{cpu::enable_interrupts()}pid
 }
 pub fn current_cwd() -> Option<String> {

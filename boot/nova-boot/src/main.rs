@@ -8,6 +8,7 @@ type Status = usize;
 type Handle = *mut c_void;
 const SUCCESS: Status = 0;
 const ALLOCATE_ANY: u32 = 0;
+const ALLOCATE_MAX: u32 = 1;
 const ALLOCATE_ADDRESS: u32 = 2;
 const LOADER_DATA: u32 = 2;
 const MAX_KERNEL: usize = 8 * 1024 * 1024;
@@ -160,8 +161,13 @@ unsafe fn boot(image: Handle, st: *mut SystemTable) -> ! {
     check(bs.allocate_pages(ALLOCATE_ANY,pages(MAP_CAPACITY),&mut map_page), "[NovaBoot] memory map allocation failed");
     let mut stack_page = 0u64;
     check(bs.allocate_pages(ALLOCATE_ANY,16,&mut stack_page), "[NovaBoot] stack allocation failed");
+    let mut ap_trampoline = 0x000f_ffffu64;
+    if bs.allocate_pages(ALLOCATE_MAX,1,&mut ap_trampoline) != SUCCESS || ap_trampoline < 0x1000 || ap_trampoline >= 0x100000 || ap_trampoline & 4095 != 0 {
+        ap_trampoline = 0;
+        log("[NovaBoot] no low AP trampoline page; SMP startup unavailable");
+    }
     let info = &mut *(info_page as *mut NovaBootInfo);
-    *info = NovaBootInfo { magic: BOOT_MAGIC, version: BOOT_VERSION, size: size_of::<NovaBootInfo>() as u32, framebuffer, memory_map: map_page, memory_map_size: 0, memory_descriptor_size: 0, memory_descriptor_version: 0, _reserved: 0, rsdp, kernel_base: low, kernel_size: high-low };
+    *info = NovaBootInfo { magic: BOOT_MAGIC, version: BOOT_VERSION, size: size_of::<NovaBootInfo>() as u32, framebuffer, memory_map: map_page, memory_map_size: 0, memory_descriptor_size: 0, memory_descriptor_version: 0, _reserved: 0, rsdp, kernel_base: low, kernel_size: high-low, ap_trampoline };
     for _ in 0..8 {
         let mut map_size = MAP_CAPACITY;
         let mut key = 0usize;

@@ -3,7 +3,7 @@
 pub mod abi;
 
 pub const BOOT_MAGIC: u64 = 0x4e4f_5641_424f_4f54;
-pub const BOOT_VERSION: u32 = 1;
+pub const BOOT_VERSION: u32 = 2;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -31,4 +31,7 @@ pub struct NovaBootInfo {
     pub rsdp: u64,
     pub kernel_base: u64,
     pub kernel_size: u64,
+    /// UEFI LoaderData page below 1 MiB reserved for an optional AP SIPI trampoline.
+    /// Zero means the firmware had no suitable page; the BSP can still boot.
+    pub ap_trampoline: u64,
 }

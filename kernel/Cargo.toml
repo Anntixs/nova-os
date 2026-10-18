@@ -14,3 +14,4 @@ path = "src/main.rs"
 selftest = []
 exceptiontest = []
 monitor = []
+smptest = []
