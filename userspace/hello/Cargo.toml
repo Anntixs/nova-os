@@ -1,0 +1,62 @@
+[package]
+name = "nova-user-programs"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "hello"
+path = "src/hello.rs"
+
+[[bin]]
+name = "exit42"
+path = "src/exit42.rs"
+[[bin]]
+name = "badmem"
+path = "src/badmem.rs"
+[[bin]]
+name = "badopcode"
+path = "src/badopcode.rs"
+[[bin]]
+name = "yieldtest"
+path = "src/yieldtest.rs"
+[[bin]]
+name = "invalidptr"
+path = "src/invalidptr.rs"
+[[bin]]
+name = "invalidsys"
+path = "src/invalidsys.rs"
+
+[[bin]]
+name = "badpriv"
+path = "src/badpriv.rs"
+
+[[bin]]
+name = "badcodewrite"
+path = "src/badcodewrite.rs"
+
+[[bin]]
+name = "badstackexec"
+path = "src/badstackexec.rs"
+
+[[bin]]
+name = "badkernel"
+path = "src/badkernel.rs"
+
+[[bin]]
+name = "filetest"
+path = "src/filetest.rs"
+
+[dependencies]
+nova-core = { path = "../../libs/nova-core" }
+
+[[bin]]
+name = "spawntest"
+path = "src/spawntest.rs"
+
+[[bin]]
+name = "maptest"
+path = "src/maptest.rs"
+
+[[bin]]
+name = "sleeptest"
+path = "src/sleeptest.rs"

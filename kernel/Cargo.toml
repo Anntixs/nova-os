@@ -1,0 +1,16 @@
+[package]
+name = "nova-kernel"
+version = "0.6.0"
+edition = "2021"
+
+[dependencies]
+nova-core = { path = "../libs/nova-core" }
+
+[[bin]]
+name = "nova-kernel"
+path = "src/main.rs"
+
+[features]
+selftest = []
+exceptiontest = []
+monitor = []

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Nova's current logical x86_64-unknown-nova C driver. Uses freestanding GCC
+# until an upstream compiler recognizes a formal Nova target.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SYSROOT="$ROOT/build/sysroot"
+[[ -f "$SYSROOT/lib/crt0.o" && -f "$SYSROOT/lib/libc.a" ]] || {
+  echo 'Nova sysroot missing; run ./scripts/build.sh first' >&2; exit 1;
+}
+exec gcc -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie \
+  -mno-red-zone -mcmodel=large -O2 -I"$SYSROOT/include" \
+  -nostdlib -static -no-pie -Wl,-T,"$ROOT/userspace/hello/linker.ld" \
+  "$SYSROOT/lib/crt0.o" "$@" "$SYSROOT/lib/libc.a"

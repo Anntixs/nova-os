@@ -1,0 +1,13 @@
+# Roadmap
+
+- Milestone 0 — IMPLEMENTED: UEFI NovaBoot, kernel ELF, BootInfo, COM1, GOP.
+- Milestone 1 — IMPLEMENTED: GDT, TSS/IST, IDT, exceptions, panic reporting, CPUID.
+- Milestone 2 — IMPLEMENTED with bootstrap limits: UEFI-map frame allocation, four-level paging, NX heap, memory statistics.
+- Milestone 3 — IMPLEMENTED for QEMU/OVMF: APIC/IOAPIC, PIT, PS/2 event queue, terminal, cpu/mem/uptime.
+- Nova OS 0.3.0 — IMPLEMENTED/EXPERIMENTAL: process/thread objects, cooperative scheduling, user address spaces, ELF64 ET_EXEC, Ring 3, syscalls, fault isolation.
+- Nova OS 0.4.0 — IMPLEMENTED/EXPERIMENTAL: PCI scan, legacy VirtIO Block, raw FAT32 system volume, VFS, file descriptors, file syscalls, disk-backed ELF execution, shell file commands, synchronous FAT32 mutation and reboot persistence.
+- Nova OS 0.5.0 — IMPLEMENTED/EXPERIMENTAL: kernel starts FAT32 `/system/init` as PID 1; init spawns Ring 3 `/bin/nsh`; C CRT, initial libc, process spawn/wait, per-process cwd, anonymous mappings, blocking TTY input and sleep, independent ELF commands, sysroot and GCC wrapper. The logical `x86_64-unknown-nova` target is not an upstream compiler target.
+- Nova OS 0.6.0 Foundation — IMPLEMENTED/EXPERIMENTAL: timer preemption on one CPU, userspace threads, orphan reaping, pipes, message channels, `/dev`, `/proc`, keyboard event records, controlled framebuffer drawing, kernel log and diagnostic C programs. SMP is still PLANNED.
+- Nova OS 0.7.0 Nova UI — PLANNED: display server, compositor, window system and desktop applications. The display server must first arbitrate framebuffer ownership with the kernel console.
+
+NovaFS, networking, accelerated graphics, audio and Nova WinBridge remain later work.

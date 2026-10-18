@@ -1,0 +1,11 @@
+# Memory
+
+## IMPLEMENTED
+
+The physical allocator parses UEFI descriptors using the handed-off descriptor stride. It makes only type 7 (`ConventionalMemory`) frames available, excludes the kernel image and the first 1 MiB, and tracks allocation and free state in two 2 MiB bitmaps. The 64 GiB bitmap coverage is an explicit current cap. LoaderData, BootServices memory, ACPI, MMIO, framebuffer, and all other non-conventional descriptors stay unavailable. `allocate_frame`, `free_frame`, and live statistics are separate from the heap. The `mem` command counts RAM-typed UEFI descriptors for total memory and reports usable, used, free, and reserved memory; MMIO holes are excluded from total.
+
+The paging layer supports four-level walks, 4 KiB map/unmap, translation through 4 KiB/2 MiB/1 GiB mappings, and flag edits for 4 KiB pages. It clones the firmware PML4 into a Nova-owned frame before changing entries; OVMF protected the original PML4 in QEMU. The heap is a 1 MiB high virtual mapping backed by 4 KiB frames and a locked linked free list. It supports allocation, alignment, freeing, coalescing, and `alloc` types such as Box and Vec. Heap and page-table frames count as used. A test build checks frame reuse, double-free rejection, mapping/unmapping, Box, Vec, alignment, and heap reuse.
+
+## LIMITATIONS
+
+The active address space still contains firmware identity mappings, including broad writable/executable regions. Heap pages receive NX when available, and APIC MMIO is mapped with cache-disable flags. W^X for all kernel mappings, guard pages, ASLR/KASLR, and SMEP/SMAP enforcement are not implemented. Nova 0.3 adds a process-owned user PML4 slot and supervisor-only kernel PML4 entries; see MEMORY_LAYOUT.md. `map_page` does not yet roll back intermediate page-table frames after a partial failure. The per-process user page-table subtree is reclaimed when a process ends; generic `unmap_page` does not reclaim empty intermediate tables. The heap does not grow past 1 MiB. The current bitmap ignores otherwise usable RAM above 64 GiB.
