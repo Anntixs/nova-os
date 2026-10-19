@@ -66,6 +66,30 @@ try:
     for command in commands:
         before = log.read_text(errors="replace").count("$ ")
         send(command)
+        if command == "fbtest":
+            wait_for("[fbtest] framebuffer lease active")
+            shot = BUILD / "nova-fb-lease.ppm"
+            shot.unlink(missing_ok=True)
+            proc.stdin.write(f"screendump {shot}\n".encode())
+            proc.stdin.flush()
+            deadline = time.monotonic() + 3
+            while not shot.is_file() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            if not shot.is_file():
+                raise AssertionError("Framebuffer lease screenshot was not captured")
+            ppm = shot.read_bytes()
+            header = re.match(rb"P6\s+(\d+)\s+(\d+)\s+255\s", ppm)
+            if not header:
+                raise AssertionError("Invalid QEMU PPM screenshot")
+            width, height = int(header[1]), int(header[2])
+            pixels = ppm[header.end():]
+            if len(pixels) != width * height * 3:
+                raise AssertionError("Truncated QEMU screenshot")
+            # The full framebuffer is blue. Text drawn by the kernel terminal
+            # during the lease would introduce light-gray glyph pixels.
+            if any(pixels[(y * width + x) * 3:(y * width + x) * 3 + 3] != b"\x24\x5c\xa8"
+                   for y in range(0, height, 13) for x in range(0, width - 64, 11)):
+                raise AssertionError("Kernel terminal rendered over the framebuffer lease")
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline:
             if log.read_text(errors="replace").count("$ ") > before:

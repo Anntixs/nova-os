@@ -14,6 +14,7 @@ impl Terminal {
         Self { fb, x: 48, y: 336, scroll_top: 336 }
     }
     pub fn clear(&mut self) {
+        if !crate::graphics::console_visible() { return; }
         for y in 0..self.fb.height as usize {
             for x in 0..self.fb.width as usize {
                 pixel(&self.fb, x, y, BG);
@@ -52,6 +53,12 @@ impl Terminal {
         self.y -= 12;
     }
     pub fn backspace(&mut self) {
+        if !crate::graphics::console_visible() {
+            crate::serial_byte(8);
+            crate::serial_byte(b' ');
+            crate::serial_byte(8);
+            return;
+        }
         if self.x > 48 {
             self.x -= 9;
             self.rect(self.x, self.y, 9, 9, BG);
@@ -62,6 +69,7 @@ impl Terminal {
     }
     pub fn char(&mut self, c: u8) {
         crate::serial_byte(c);
+        if !crate::graphics::console_visible() { return; }
         if c == b'\n' {
             self.x = 48;
             self.y += 12;

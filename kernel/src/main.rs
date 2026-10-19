@@ -138,7 +138,7 @@ impl Write for Diagnostic {
             let row=DIAG_ROW.load(Ordering::Relaxed);
             // SAFETY: the framebuffer is set once before interrupts are enabled. Fatal diagnostics
             // run with interrupts disabled; immutable copying cannot race with initialization.
-            if let Some(f) = unsafe { DIAG_FB } {
+            if let Some(f) = unsafe { DIAG_FB }.filter(|_| PANICKING.load(Ordering::Relaxed) || graphics::console_visible()) {
                 if b != b'\n' && b >= 32 && b < 127 {
                     let x = (col % 100) * 9 + 48;
                     let y = row * 10 + DIAG_BASE_Y.load(Ordering::Relaxed);

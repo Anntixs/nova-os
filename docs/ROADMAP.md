@@ -9,6 +9,6 @@
 - Nova OS 0.5.0 — IMPLEMENTED/EXPERIMENTAL: kernel starts FAT32 `/system/init` as PID 1; init spawns Ring 3 `/bin/nsh`; C CRT, initial libc, process spawn/wait, per-process cwd, anonymous mappings, blocking TTY input and sleep, independent ELF commands, sysroot and GCC wrapper. The logical `x86_64-unknown-nova` target is not an upstream compiler target.
 - Nova OS 0.6.0 Foundation — IMPLEMENTED/EXPERIMENTAL: timer preemption on one CPU, userspace threads, orphan reaping, pipes, message channels, `/dev`, `/proc`, keyboard event records, controlled framebuffer drawing, kernel log and diagnostic C programs. SMP is still PLANNED.
 - Multicore/platform development — EXPERIMENTAL: MADT CPU discovery, NovaBoot low trampoline reservation, INIT/SIPI AP entry and AP-local GDT/TSS/IST/IDT are implemented and tested in QEMU up to eight CPUs. APs idle; only the BSP runs the scheduler. SMP-safe process/scheduler/IPC work and all Stage B drivers are PLANNED. Version remains 0.6.0.
-- Nova UI — PLANNED after a stable platform milestone. The display server must first arbitrate framebuffer ownership with the kernel console.
+- Nova UI — PLANNED after a stable platform milestone. The framebuffer lease now suppresses normal kernel-console rendering and restores it on release or owner death. The remaining platform gates are recorded in `UI_READINESS.md`.
 
 NovaFS, networking, accelerated graphics, audio and Nova WinBridge remain later work.

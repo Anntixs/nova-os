@@ -3,6 +3,8 @@
 use core::sync::atomic::{AtomicU64,Ordering};
 use crate::process::ProcessId;
 static OWNER:AtomicU64=AtomicU64::new(0);
+/// The kernel console may render only while no userspace process owns GOP.
+pub fn console_visible()->bool{OWNER.load(Ordering::Acquire)==0}
 
 pub struct Rect {pub x:u32,pub y:u32,pub width:u32,pub height:u32}
 pub fn info()->Option<[u8;24]>{
@@ -19,9 +21,15 @@ pub fn acquire(pid:ProcessId)->Result<(),i64>{
  }
 }
 pub fn release(pid:ProcessId)->Result<(),i64>{
- OWNER.compare_exchange(pid.0,0,Ordering::AcqRel,Ordering::Acquire).map(|_|()).map_err(|_|-1)
+ OWNER.compare_exchange(pid.0,0,Ordering::AcqRel,Ordering::Acquire).map_err(|_|-1)?;
+ crate::process::clear_output();
+ Ok(())
 }
-pub fn release_if_owner(pid:ProcessId){let _=OWNER.compare_exchange(pid.0,0,Ordering::AcqRel,Ordering::Acquire);}
+pub fn release_if_owner(pid:ProcessId){
+ if OWNER.compare_exchange(pid.0,0,Ordering::AcqRel,Ordering::Acquire).is_ok(){
+  crate::process::clear_output();
+ }
+}
 fn check(pid:ProcessId,rect:&Rect)->Result<nova_core::Framebuffer,i64>{
  if OWNER.load(Ordering::Acquire)!=pid.0{return Err(-1)}
  let fb=crate::framebuffer().ok_or(-19i64)?;
