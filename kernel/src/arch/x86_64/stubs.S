@@ -155,9 +155,15 @@ nova_isr_unknown:
     jmp nova_isr_common
 nova_isr_common:
     cld
+    // All stubs place vector and error before the hardware frame; saved CS
+    // is RSP+24. Fatal user faults enter Rust with the trusted CPU-local GS.
+    test byte ptr [rsp + 24], 3
+    jz 1f
+    swapgs
+1:
     mov rdi, rsp
     and rsp, -16
     call nova_exception_dispatch
-1:  cli
+2:  cli
     hlt
-    jmp 1b
+    jmp 2b

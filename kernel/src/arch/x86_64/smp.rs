@@ -123,6 +123,8 @@ pub fn probe(topology:&Topology,page:u64){
     let vector=(page>>12) as u32;
     if topology.processor_count>8 {crate::nova_log!(Warn,"SMP","only 8 processors (including BSP) have prepared stacks")}
     let mut logical=1usize;
+    #[cfg(feature="smptest")]
+    let mut acknowledged=0u64;
     for processor in topology.processors[..topology.processor_count].iter().flatten() {
         if processor.apic_id==bsp {continue}
         if logical>=8 {break}
@@ -135,34 +137,50 @@ pub fn probe(topology:&Topology,page:u64){
         percpu::set_state(logical,percpu::State::Starting);
         if apic::send_ipi(processor.apic_id,0xc500).is_err(){
             percpu::set_state(logical,percpu::State::Failed);
-            crate::nova_log!(Warn,"SMP","INIT IPI failed for APIC {}",processor.apic_id);logical+=1;continue
+            crate::nova_log!(Warn,"SMP","INIT IPI failed for APIC {}; stopping AP startup to preserve trampoline ownership",processor.apic_id);
+            break
         }
         wait_ms(10);
-        let _=apic::send_ipi(processor.apic_id,0x8500);
+        if apic::send_ipi(processor.apic_id,0x8500).is_err(){
+            percpu::set_state(logical,percpu::State::Failed);
+            crate::nova_log!(Warn,"SMP","INIT deassert failed for APIC {}; stopping AP startup",processor.apic_id);
+            break
+        }
         wait_ms(1);
         if apic::send_ipi(processor.apic_id,0x600|vector).is_err(){
             percpu::set_state(logical,percpu::State::Failed);
-            crate::nova_log!(Warn,"SMP","SIPI failed for APIC {}",processor.apic_id);logical+=1;continue
+            crate::nova_log!(Warn,"SMP","SIPI failed for APIC {}; stopping AP startup to preserve trampoline ownership",processor.apic_id);
+            break
         }
         if !wait_reached(logical,100) {
-            let _=apic::send_ipi(processor.apic_id,0x600|vector);
+            if apic::send_ipi(processor.apic_id,0x600|vector).is_err(){
+                percpu::set_state(logical,percpu::State::Failed);
+                crate::nova_log!(Warn,"SMP","second SIPI failed for APIC {}; stopping AP startup",processor.apic_id);
+                break
+            }
         }
         if wait_reached(logical,100){
+            #[cfg(feature="smptest")]
+            {acknowledged|=1u64<<logical;}
             crate::nova_log!(Info,"SMP","APIC {} entered Nova long-mode code; scheduler still BSP-only",processor.apic_id);
         }else{
             percpu::set_state(logical,percpu::State::Failed);
             crate::nova_log!(Warn,"SMP","APIC {} failed to acknowledge startup",processor.apic_id);
+            // An AP may arrive after our timeout. Keep its patched stack and
+            // logical index intact; rewriting this shared low page for another
+            // AP could send both CPUs through the same mutable TSS/stack.
+            break
         }
         logical+=1;
     }
     #[cfg(feature="smptest")]
     {
         STRESS_GO.store(true,Ordering::Release);
-        let expected=(1u64<<logical)-2;
+        let expected=acknowledged;
         let deadline=timer::uptime_ms().saturating_add(3000);
         while STRESS_DONE.load(Ordering::Acquire)&expected!=expected&&timer::uptime_ms()<deadline {cpu::halt()}
         if STRESS_DONE.load(Ordering::Acquire)&expected==expected&&STRESS_FAILED.load(Ordering::Acquire)==0 {
-            crate::nova_log!(Info,"TEST","SMP allocator stress passed on {} APs",logical-1);
+            crate::nova_log!(Info,"TEST","SMP allocator stress passed on {} APs",expected.count_ones());
         }else{
             crate::nova_log!(Error,"TEST","SMP allocator stress failed or timed out: done={:#x} failed={:#x}",STRESS_DONE.load(Ordering::Acquire),STRESS_FAILED.load(Ordering::Acquire));
         }

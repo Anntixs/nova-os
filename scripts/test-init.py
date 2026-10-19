@@ -62,7 +62,7 @@ try:
     wait_for("nova:/$ ")
     proc.stdin.write(f"screendump {BUILD / 'nova-boot.ppm'}\n".encode())
     proc.stdin.flush()
-    commands = ("pwd", "ls /", "ls /dev", "ls /proc", "cat /proc/uptime", "sysinfo", "cpuinfo", "ps", "uptime", "dmesg", "env", "devtest", "fbtest", "cat /etc/version", "hello-c", "malloctest", "memtest", "spawntest-c", "schedtest", "threadtest", "pipetest", "msgtest", "orphantest", "killtest", 'args one two "hello nova"', "cd /bin", "pwd", "./pwd", 'echo "Nova works"', "badmem", "badopcode", "invalidptr", "invalidsys", "syscheck", "hello", "hello-c", "hello-c", "hello-c")
+    commands = ("pwd", "ls /", "ls /dev", "ls /proc", "cat /proc/uptime", "sysinfo", "cpuinfo", "ps", "uptime", "dmesg", "env", "devtest", "fbtest", "cat /etc/version", "hello-c", "malloctest", "memtest", "spawntest-c", "schedtest", "threadtest", "pipetest", "msgtest", "gsattack", "orphantest", "killtest", 'args one two "hello nova"', "cd /bin", "pwd", "./pwd", 'echo "Nova works"', "badmem", "badopcode", "invalidptr", "invalidsys", "syscheck", "hello", "hello-c", "hello-c", "hello-c")
     for command in commands:
         before = log.read_text(errors="replace").count("$ ")
         send(command)
@@ -92,7 +92,7 @@ try:
     proc.stdin.flush()
     time.sleep(0.3)
     content=log.read_text(errors="replace")
-    expected = ("Nova OS 0.6.0", "launching /system/init as PID 1", "NovaShell (Ring 3)", "null", "zero", "meminfo", "UptimeMilliseconds:", "Nova system information", "PID 1", "Uptime:", "PATH=/bin", "Device test passed. Framebuffer", "Framebuffer test passed.", "Hello from Nova C userspace!", "Malloc test passed.", "Memory test passed. Invalid access isolated.", "C spawn test passed:", "Scheduler test passed.", "Userspace thread test passed.", "Pipe test passed.", "Message channel test passed.", "Orphan test spawned PID", "orphan PID", "Kill test passed.", "Killed PID", "argc = 4", "argv[3] = hello nova", "Nova works", "fault vector 14", "fault vector 6", "Invalid pointer rejected", "Invalid syscall rejected", "Nova stderr works.", "Syscall validation passed.", "Hello from Nova userspace!")
+    expected = ("Nova OS 0.6.0", "launching /system/init as PID 1", "NovaShell (Ring 3)", "null", "zero", "meminfo", "UptimeMilliseconds:", "Nova system information", "PID 1", "Uptime:", "PATH=/bin", "Device test passed. Framebuffer", "Framebuffer test passed.", "Hello from Nova C userspace!", "Malloc test passed.", "Memory test passed. Invalid access isolated.", "C spawn test passed:", "Scheduler test passed.", "Userspace thread test passed.", "Pipe test passed.", "Message channel test passed.", "GS syscall and timer entry test passed.", "Orphan test spawned PID", "orphan PID", "Kill test passed.", "Killed PID", "argc = 4", "argv[3] = hello nova", "Nova works", "fault vector 14", "fault vector 6", "Invalid pointer rejected", "Invalid syscall rejected", "Nova stderr works.", "Syscall validation passed.", "Hello from Nova userspace!")
     for marker in expected:
         if marker not in content: raise AssertionError(f"Missing {marker!r} in {log}")
     requested_cpus = int(os.environ.get("NOVA_SMP", "1"))

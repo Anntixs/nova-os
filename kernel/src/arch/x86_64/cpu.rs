@@ -1,5 +1,18 @@
 use core::arch::asm;
 
+pub fn disable_fsgsbase() {
+    let cr4: u64;
+    // SAFETY: called at CPL0 before this CPU admits user threads. Clearing
+    // CR4.FSGSBASE prevents Ring 3 from changing the GS base that Nova's
+    // syscall entry trusts for its CPU-local stack pointer.
+    unsafe {
+        asm!("mov {}, cr4", out(reg) cr4, options(nostack, preserves_flags));
+        if cr4 & (1 << 16) != 0 {
+            asm!("mov cr4, {}", in(reg) (cr4 & !(1 << 16)), options(nostack, preserves_flags));
+        }
+    }
+}
+
 pub fn disable_interrupts() {
     // SAFETY: kernel ring 0 may change IF; callers ensure IRQ handlers are installed before re-enabling.
     unsafe {

@@ -1,15 +1,13 @@
 use core::arch::{asm, global_asm};
-use core::sync::atomic::{AtomicU64, Ordering};
+use super::percpu;
 
-global_asm!(include_str!("syscall.S"));
+global_asm!(include_str!("syscall.S"),
+    user_rsp_off=const percpu::USER_RSP_OFFSET,
+    kernel_stack_off=const percpu::KERNEL_STACK_OFFSET,
+);
 unsafe extern "C" {
     static nova_syscall_entry: u8;
 }
-#[no_mangle]
-static NOVA_SYSCALL_STACK: AtomicU64 = AtomicU64::new(0);
-#[no_mangle]
-static NOVA_USER_RSP: AtomicU64 = AtomicU64::new(0);
-
 fn rdmsr(n: u32) -> u64 {
     let lo: u32;
     let hi: u32;
@@ -34,5 +32,5 @@ pub fn init() {
     wrmsr(0xc000_0080, rdmsr(0xc000_0080) | 1); // EFER.SCE
 }
 pub fn set_stack(top: u64) {
-    NOVA_SYSCALL_STACK.store(top, Ordering::SeqCst);
+    percpu::set_kernel_stack(top);
 }

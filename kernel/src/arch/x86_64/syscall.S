@@ -2,9 +2,11 @@
 .global nova_syscall_entry
 nova_syscall_entry:
     // SYSCALL leaves the user RSP active; FMASK has cleared IF.
-    mov [rip+NOVA_USER_RSP], rsp
-    mov rsp, [rip+NOVA_SYSCALL_STACK]
-    push qword ptr [rip+NOVA_USER_RSP]
+    // SWAPGS installs the trusted kernel GS base before looking up the stack.
+    swapgs
+    mov gs:[{user_rsp_off}], rsp
+    mov rsp, gs:[{kernel_stack_off}]
+    push qword ptr gs:[{user_rsp_off}]
     push rcx
     push r11
     push rdi
@@ -34,4 +36,5 @@ nova_syscall_entry:
     pop r11
     pop rcx
     mov rsp, [rsp]
+    swapgs
     sysretq

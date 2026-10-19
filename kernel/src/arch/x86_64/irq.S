@@ -12,6 +12,12 @@ nova_irq_spurious:
     jmp nova_irq_common
 nova_irq_common:
     cld
+    // After the vector push, saved CS is at RSP+16. User IRQs must install
+    // the trusted per-CPU GS base before Rust can access CPU-local state.
+    test byte ptr [rsp + 16], 3
+    jz 1f
+    swapgs
+1:
     push rax
     push rbx
     push rcx
@@ -50,5 +56,10 @@ nova_irq_common:
     pop rcx
     pop rbx
     pop rax
+    // Restore the interrupted user's GS base only for a Ring 3 frame.
+    test byte ptr [rsp + 16], 3
+    jz 2f
+    swapgs
+2:
     add rsp, 8
     iretq

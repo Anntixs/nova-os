@@ -28,6 +28,9 @@ nova_enter_user:
     push 0x202
     push 0x23
     push rdi
+    // User GS may be changed by user code. Keep the trusted per-CPU base in
+    // IA32_KERNEL_GS_BASE for the next syscall, IRQ or exception entry.
+    swapgs
     iretq
 
 .section .rodata
