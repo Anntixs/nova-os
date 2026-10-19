@@ -167,7 +167,9 @@ extern "C" fn nova_exception_dispatch(frame: *const FaultFrame) -> ! {
     cpu::disable_interrupts();
     // SAFETY: assembly stub places these five words on a live exception stack before calling us.
     let f = unsafe { &*frame };
-    if f.cs & 3 == 3 && f.vector != 8 && f.vector != 18 {
+    // NMI is a CPU/platform event, not a fault caused by the interrupted
+    // userspace instruction. Treat it as fatal until Nova has an NMI handler.
+    if f.cs & 3 == 3 && f.vector != 2 && f.vector != 8 && f.vector != 18 {
         let address=if f.vector==14 {cpu::read_cr2()} else {f.rip};
         crate::process::fault(f.vector,address);
         if let Some(pid)=crate::process::current_pid(){crate::scheduler::kill_process_threads(pid)}
@@ -223,10 +225,11 @@ extern "C" fn nova_exception_dispatch(frame: *const FaultFrame) -> ! {
             }
         );
     }
+    let cpu_id=super::apic::try_local_id();
     let _ = write!(
         out,
-        "PID: {:?} TID: {:?}\nCR3: {:#018x}\nCPU: 0 (bootstrap processor)\nSystem halted.\n========================================\n",
-        crate::process::try_current_pid().map(|p|p.0),crate::scheduler::try_current_tid().map(|t|t.0),cpu::read_cr3()
+        "PID: {:?} TID: {:?}\nCR3: {:#018x}\nLocal APIC ID: {:?}\nSystem halted.\n========================================\n",
+        crate::process::try_current_pid().map(|p|p.0),crate::scheduler::try_current_tid().map(|t|t.0),cpu::read_cr3(),cpu_id
     );
     cpu::halt_forever()
 }

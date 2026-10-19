@@ -3,13 +3,14 @@ use crate::memory::{
     paging::{self, PageFlags},
     Page, PhysAddr, PhysFrame, VirtAddr,
 };
-use core::arch::asm;
+use core::{arch::asm,sync::atomic::{AtomicBool,Ordering}};
 use crate::platform::acpi;
 
 const LAPIC_VA: u64 = 0xffff_9200_0000_0000;
 const IOAPIC_VA: u64 = 0xffff_9200_0000_1000;
 static mut LAPIC: *mut u32 = core::ptr::null_mut();
 static mut IOAPIC: *mut u32 = core::ptr::null_mut();
+static APIC_READY:AtomicBool=AtomicBool::new(false);
 #[derive(Debug)]
 pub enum Error {
     MissingApic,
@@ -58,6 +59,9 @@ pub fn eoi() {
     lapic_write(0xb0, 0);
 }
 pub fn local_id() -> u8 { (lapic_read(0x20) >> 24) as u8 }
+pub fn try_local_id()->Option<u8>{
+    APIC_READY.load(Ordering::Acquire).then(local_id)
+}
 pub fn enable_local(){
     msr_write(0x1b,msr_read(0x1b)|(1<<11));
     lapic_write(0x80,0);
@@ -128,5 +132,6 @@ pub fn init(r: &acpi::Topology, features: u64) -> Result<(), Error> {
     // Mask legacy PIC so only IOAPIC routes hardware interrupts.
     cpu::port_out(0x21, 0xff);
     cpu::port_out(0xa1, 0xff);
+    APIC_READY.store(true,Ordering::Release);
     Ok(())
 }
