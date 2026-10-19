@@ -243,22 +243,23 @@ pub fn exit_thread()->! {
 pub fn join(tid:ThreadId)->Result<(),i64>{
  let pid=crate::process::current_pid().ok_or(-3i64)?;
  loop {
-  let status=with_sched(|s|{
+  // Inspect the target and register the waiter under the same lock. Otherwise
+  // the target can exit between those steps and its wakeup is lost forever.
+  let pending=with_sched(|s|{
    let current=s.current.ok_or(-3i64)?;
    if s.threads[current].as_ref().unwrap().tid==tid{return Err(-22i64)}
    let index=s.threads.iter().position(|slot|slot.as_ref().is_some_and(|t|t.tid==tid&&t.pid==pid)).ok_or(-3i64)?;
    if s.threads[index].as_ref().unwrap().state==ThreadState::Exited {
-    s.threads[index]=None;return Ok(true)
+    s.threads[index]=None;return Ok(None)
    }
-   Ok::<bool,i64>(false)
-  })?;
-  if status{crate::process::remove_thread(tid);return Ok(())}
-  let (old,new)=with_sched(|s|{
-   let i=s.current.take().expect("join without running thread");
-   let t=s.threads[i].as_mut().unwrap();t.state=ThreadState::Blocked;t.waiting_for=Some(tid);
+   let thread=s.threads[current].as_mut().expect("join without running thread");
+   thread.state=ThreadState::Blocked;
+   thread.waiting_for=Some(tid);
    crate::process::mark_blocked(pid);
-   (&raw mut t.context,&raw const s.host)
-  });
+   s.current=None;
+   Ok::<Option<(*mut Context,*const Context)>,i64>(Some((&raw mut thread.context,&raw const s.host)))
+  })?;
+  let Some((old,new))=pending else {crate::process::remove_thread(tid);return Ok(())};
   // SAFETY: the blocked thread's pinned context remains owned by the scheduler
   // until the joined thread exits and queues it again.
   unsafe{context::switch(old,new)}

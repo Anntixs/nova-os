@@ -6,6 +6,8 @@ The legacy ready queue now receives a timer-driven preemption request every ten 
 
 When an event arrives after a consumer registers its wait but before it parks, `wake` now records a pending notification on the running thread. `block_current` consumes that notification and retries the condition instead of sleeping after the event. This closes the enqueue-to-park lost-wakeup window for the current BSP scheduler. A future multicore scheduler still needs an atomic park/switch protocol so another CPU cannot run a thread before its old CPU has finished switching away.
 
+`thread_join` now checks the target state and registers the joining thread as blocked in one scheduler critical section. Previously the target could exit between separate critical sections and leave the joiner blocked forever. The userspace thread test now creates and joins 64 short-lived threads after its two-thread test; this passed under QEMU with one and four configured CPUs. This tests the BSP join path, not execution of ordinary threads on APs.
+
 ## EXPERIMENTAL / PLANNED
 
 Preemption is tested on a single active CPU. Queue and IPC critical sections mask local interrupts and require redesign before SMP. There is no priority policy, CPU affinity or real-time guarantee.
