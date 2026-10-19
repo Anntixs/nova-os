@@ -4,6 +4,8 @@
 
 The legacy ready queue now receives a timer-driven preemption request every ten PIT ticks. Context switching retains each thread's kernel stack and CPU context. `yield` remains available. Blocking waits for stdin, sleep, child exit, pipe and channel activity remove the thread from the runnable queue; producer/IRQ paths wake it. A user process can hold more than one thread. `/bin/schedtest` runs two CPU-bound children without explicit yield and has been observed to interleave `A1 B1 A2 B2 A3 B3` under QEMU.
 
+When an event arrives after a consumer registers its wait but before it parks, `wake` now records a pending notification on the running thread. `block_current` consumes that notification and retries the condition instead of sleeping after the event. This closes the enqueue-to-park lost-wakeup window for the current BSP scheduler. A future multicore scheduler still needs an atomic park/switch protocol so another CPU cannot run a thread before its old CPU has finished switching away.
+
 ## EXPERIMENTAL / PLANNED
 
 Preemption is tested on a single active CPU. Queue and IPC critical sections mask local interrupts and require redesign before SMP. There is no priority policy, CPU affinity or real-time guarantee.

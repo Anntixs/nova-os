@@ -31,6 +31,10 @@ fn test_step(expected: usize, label: &str) {
 }
 #[cfg(feature = "selftest")]
 extern "C" fn test_a() -> ! {
+    // Model an event delivered between wait registration and the park call.
+    // A lost notification would block this thread and stall the self-test.
+    wake(ProcessId(0));
+    block_current();
     test_step(0, "[NOVA][TEST] A1");
     yield_current();
     test_step(2, "[NOVA][TEST] A2");
@@ -201,14 +205,20 @@ pub fn exit_current() -> ! {
 }
 
 pub fn block_current() {
- let (old,new)=with_sched(|s|{
-  let i=s.current.take().expect("block without running thread");
+ let pair=with_sched(|s|{
+  let i=s.current.expect("block without running thread");
+  if s.threads[i].as_ref().expect("current thread missing").wake_pending {
+   s.threads[i].as_mut().unwrap().wake_pending=false;
+   return None;
+  }
+  s.current=None;
   let thread=s.threads[i].as_mut().expect("current thread missing");
   thread.state=ThreadState::Blocked;
   thread.waiting_for=None;
   crate::process::mark_blocked(thread.pid);
-  (&raw mut thread.context,&raw const s.host)
+  Some((&raw mut thread.context,&raw const s.host))
  });
+ let Some((old,new))=pair else{return};
  // SAFETY: the blocked thread owns its pinned kernel stack. Its context remains
  // in the scheduler until a wake event queues it again.
  unsafe{context::switch(old,new)}
@@ -264,8 +274,12 @@ pub fn kill_process_threads(pid:ProcessId){with_sched(|s|{
 pub fn wake(pid:ProcessId) {
  with_sched(|s|{
   for (i,slot) in s.threads.iter_mut().enumerate(){
-   if let Some(t)=slot.as_mut(){if t.pid==pid&&t.state==ThreadState::Blocked {
-    t.state=ThreadState::Ready;s.ready.push_back(i);crate::process::mark_ready(pid);
+   if let Some(t)=slot.as_mut(){if t.pid==pid {
+    if t.state==ThreadState::Blocked {
+     t.state=ThreadState::Ready;s.ready.push_back(i);crate::process::mark_ready(pid);
+    } else if t.state==ThreadState::Running {
+     t.wake_pending=true;
+    }
    }}
   }
  });

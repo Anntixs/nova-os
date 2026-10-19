@@ -24,6 +24,9 @@ pub struct Thread {
     pub kernel_stack: Box<[u8; KERNEL_STACK_SIZE]>,
     pub user_entry_stack: Option<(u64,u64)>,
     pub waiting_for: Option<ThreadId>,
+    /// A wakeup delivered while this thread is still running. Consumed by the
+    /// next block attempt so an event cannot be lost between enqueue and park.
+    pub wake_pending: bool,
 }
 impl Thread {
     pub fn new(tid: ThreadId, pid: ProcessId, entry: extern "C" fn() -> !) -> Self {
@@ -43,6 +46,7 @@ impl Thread {
             kernel_stack: stack,
             user_entry_stack: None,
             waiting_for: None,
+            wake_pending: false,
         }
     }
     pub fn kernel_stack_top(&self) -> u64 {
