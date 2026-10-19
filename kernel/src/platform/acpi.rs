@@ -142,7 +142,9 @@ pub fn discover(info: &NovaBootInfo) -> Result<Topology, Error> {
         }
         if kind == 0 && size >= 8 {
             let apic_id = unsafe { madt.add(pos + 3).read() };
-            let enabled = u32_at(madt, pos + 4) & 3 != 0;
+            // MADT bit 0 means enabled now. Bit 1 only means the CPU may be
+            // brought online later through ACPI; Nova has no CPU hotplug path.
+            let enabled = u32_at(madt, pos + 4) & 1 != 0;
             if enabled && !route.processors[..route.processor_count].iter().flatten().any(|cpu| cpu.apic_id == apic_id) {
                 if route.processor_count == route.processors.len() { return Err(Error::TooManyProcessors); }
                 route.processors[route.processor_count] = Some(Processor { apic_id, acpi_id: unsafe { madt.add(pos + 2).read() } });

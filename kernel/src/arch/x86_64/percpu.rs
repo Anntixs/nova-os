@@ -43,12 +43,13 @@ pub fn init_current(logical:usize,apic_id:u32,stack:u64){
     local.kernel_stack.store(stack,Ordering::Release);
     let base=local as *const PerCpu as u64;
     // SAFETY: both GS base MSRs exist in x86_64 long mode. The pinned record
-    // remains live for this CPU. On user entry, SWAPGS places the trusted base
-    // in IA32_KERNEL_GS_BASE; every user-to-kernel path swaps it back before
-    // reading GS, even if userspace changed its own GS selector.
+    // remains live for this CPU. The initial user GS base is zero, so the
+    // first SWAPGS into Ring 3 cannot expose a kernel pointer. SWAPGS places
+    // the trusted base in IA32_KERNEL_GS_BASE; every user-to-kernel path swaps
+    // it back before reading GS, even if userspace changed its own GS selector.
     unsafe{
         asm!("wrmsr",in("ecx")0xc000_0101u32,in("eax")base as u32,in("edx")(base>>32) as u32,options(nostack,preserves_flags));
-        asm!("wrmsr",in("ecx")0xc000_0102u32,in("eax")base as u32,in("edx")(base>>32) as u32,options(nostack,preserves_flags));
+        asm!("wrmsr",in("ecx")0xc000_0102u32,in("eax")0u32,in("edx")0u32,options(nostack,preserves_flags));
     }
 }
 pub fn set_kernel_stack(top:u64){
