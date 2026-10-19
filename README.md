@@ -14,7 +14,11 @@ Run `python3 scripts/test-init.py` for the normal QEMU boot and userspace regres
 
 Run `./scripts/package-image.sh` to build a downloadable QEMU archive in `build/`. It contains separate raw FAT32 EFI and Nova system disks, a `run-qemu.sh` launcher and SHA-256 checksums. A clean packaged system disk is created without overwriting writable data in the normal development image. It is a QEMU/OVMF development image, not a single GPT disk or a tested physical-hardware installer.
 
+The same packaging command also creates `build/nova-os-0.6.0-qemu-x86_64-windows.zip` with `run-qemu-windows.bat`. On Windows, extract the ZIP, install QEMU for Windows and double-click the BAT file. It searches for QEMU and matching OVMF firmware; if OVMF is missing, place `OVMF_CODE_4M.fd` and `OVMF_VARS_4M.fd` beside the BAT. The BAT is a launcher for QEMU; the operating system still boots from the two IMG files.
+
 The [prebuilt Nova 0.6.0 QEMU archive](releases/nova-os-0.6.0-qemu-x86_64.tar.gz) and its [SHA-256 checksum](releases/nova-os-0.6.0-qemu-x86_64.tar.gz.sha256) are checked in for direct download. This release reached the Ring 3 `nsh` prompt when booted from both packaged images with QEMU/OVMF and four virtual CPUs.
+
+For Windows, download the [ZIP with BAT launcher](releases/nova-os-0.6.0-qemu-x86_64-windows.zip) and its [SHA-256 checksum](releases/nova-os-0.6.0-qemu-x86_64-windows.zip.sha256). Extract it, then run `run-qemu-windows.bat`. QEMU and matching OVMF firmware must be installed separately. The BAT launcher has been inspected and packaged but has not been executed on Windows; the same ZIP's disk images booted to `nova:/$` under QEMU/OVMF on Linux.
 
 Foundation adds timer preemption on one active CPU, user threads, orphan reaping, pipes, message channels, `/dev`, `/proc`, input event records, a controlled framebuffer drawing API and a bounded kernel log. See [ARCHITECTURE.md](docs/ARCHITECTURE.md), [IPC.md](docs/IPC.md), [GRAPHICS.md](docs/GRAPHICS.md), [INPUT.md](docs/INPUT.md) and [SYSCALLS.md](docs/SYSCALLS.md). SMP, a mouse driver, a display server and Nova UI are later work.
 

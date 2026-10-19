@@ -11,6 +11,12 @@ ARCHIVE="$ROOT/build/$NAME.tar.gz"
 mkdir -p "$RELEASE_DIR"
 cp build/nova-efi.img "$RELEASE_DIR/nova-efi.img"
 NOVA_FRESH_IMAGE=1 NOVA_SYSTEM_IMAGE_OUTPUT="$RELEASE_DIR/nova-system.img" python3 scripts/make-system-image.py
+python3 - "$RELEASE_DIR/run-qemu-windows.bat" <<'PY'
+from pathlib import Path
+import sys
+source = Path('scripts/run-qemu-windows.bat').read_text()
+Path(sys.argv[1]).write_bytes(source.replace('\r\n', '\n').replace('\n', '\r\n').encode('utf-8'))
+PY
 
 cat > "$RELEASE_DIR/README.txt" <<'EOF'
 Nova OS x86_64 / UEFI QEMU development image
@@ -23,6 +29,11 @@ Requirements: qemu-system-x86_64 and OVMF_CODE_4M.fd / OVMF_VARS_4M.fd.
 Run ./run-qemu.sh from this directory. The script detects common OVMF paths;
 set OVMF_CODE and OVMF_VARS if yours differ. Set NOVA_SMP=4 or NOVA_RAM=1G
 to change the VM. Set NOVA_DISPLAY=none for headless serial output.
+
+On Windows, double-click run-qemu-windows.bat. Install QEMU for Windows first.
+The BAT file checks common QEMU paths. If its bundled UEFI firmware is absent,
+copy OVMF_CODE_4M.fd and OVMF_VARS_4M.fd beside the BAT, or set OVMF_CODE
+and OVMF_VARS to the matching files. Keep both IMG files in this directory.
 
 The system image is a fresh development volume. Nova 0.6.0 starts additional
 APs, but its user scheduler still runs on the bootstrap CPU. This package
@@ -63,8 +74,20 @@ chmod +x "$RELEASE_DIR/run-qemu.sh"
   sha256sum nova-efi.img nova-system.img > SHA256SUMS
 )
 tar -C "$ROOT/build/release" -czf "$ARCHIVE" "$NAME"
+python3 - "$ROOT/build/$NAME-windows.zip" "$ROOT/build/release" "$NAME" <<'PY'
+from pathlib import Path
+from zipfile import ZipFile, ZIP_DEFLATED
+import sys
+archive, parent, name = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+with ZipFile(archive, 'w', compression=ZIP_DEFLATED, compresslevel=9) as out:
+    for path in sorted((parent / name).iterdir()):
+        if path.is_file():
+            out.write(path, f'{name}/{path.name}')
+PY
 (
   cd "$ROOT/build"
   sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
+  sha256sum "$NAME-windows.zip" > "$NAME-windows.zip.sha256"
 )
 echo "Nova release archive: $ARCHIVE"
+echo "Nova Windows archive: $ROOT/build/$NAME-windows.zip"
