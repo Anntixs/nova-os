@@ -30,4 +30,5 @@ mkdir -p build/esp/EFI/BOOT build/esp/EFI/NOVA
 python3 scripts/make-system-image.py
 cp target/x86_64-unknown-uefi/$PROFILE/nova-boot.efi build/esp/EFI/BOOT/BOOTX64.EFI
 cp target/x86_64-unknown-none/$PROFILE/nova-kernel build/esp/EFI/NOVA/KERNEL.ELF
+python3 scripts/make-efi-image.py
 echo 'Nova ESP staged at build/esp'

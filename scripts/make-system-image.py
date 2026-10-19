@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Build Nova's temporary raw FAT32 development volume without host mkfs tools."""
 from pathlib import Path
+import os
 import struct
 import tomllib
 
-OUT = Path('build/nova-system.img')
+OUT = Path(os.environ.get('NOVA_SYSTEM_IMAGE_OUTPUT', 'build/nova-system.img'))
 VERSION = tomllib.loads(Path('kernel/Cargo.toml').read_text())['package']['version']
 SECTOR = 512
 SECTORS = 131072
@@ -67,7 +68,7 @@ def saved_user_data():
     root = scan(ROOT_CLUSTER)
     return {k: root.get(k, {}) for k in ('home', 'system', 'tmp')}
 
-PRESERVED = saved_user_data()
+PRESERVED = {} if os.environ.get('NOVA_FRESH_IMAGE') == '1' else saved_user_data()
 NEXT = 3
 fat = [0] * (FAT_SECTORS * SECTOR // 4)
 fat[0:3] = [0x0FFFFFF8, 0x0FFFFFFF, 0x0FFFFFFF]
