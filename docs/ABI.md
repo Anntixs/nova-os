@@ -2,7 +2,7 @@
 
 ## Foundation extensions (experimental)
 
-Syscall numbers 1–18 are retained. Implemented additions 19–33 cover pipes, message channels, userspace threads, controlled framebuffer drawing, TTY clear, direct-child termination and nonblocking child wait. All return signed 64-bit RAX values (nonnegative success, negative error). `EAGAIN=-11`, `EFAULT=-14`, `EPIPE=-32` and `EMSGSIZE=-90` are wire numbers; no Rust enum layout crosses the boundary. See [SYSCALLS.md](SYSCALLS.md), [IPC.md](IPC.md), [GRAPHICS.md](GRAPHICS.md) and [INPUT.md](INPUT.md). The ABI remains experimental and x86_64 specific.
+Syscall numbers 1–18 are retained. Implemented additions 19–35 cover pipes, message channels, userspace threads, controlled framebuffer drawing, TTY clear, direct-child termination, nonblocking child wait and exclusive raw keyboard input. All return signed 64-bit RAX values (nonnegative success, negative error). `EAGAIN=-11`, `EFAULT=-14`, `EPIPE=-32` and `EMSGSIZE=-90` are wire numbers; no Rust enum layout crosses the boundary. See [SYSCALLS.md](SYSCALLS.md), [IPC.md](IPC.md), [GRAPHICS.md](GRAPHICS.md) and [INPUT.md](INPUT.md). The ABI remains experimental and x86_64 specific.
 
 ## IMPLEMENTED (experimental ABI)
 

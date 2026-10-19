@@ -220,7 +220,7 @@ pub fn translate_user(addr: u64, write: bool) -> Option<u64> {
     })
 }
 pub fn exit(code: i32) {
-    if let Some(pid)=current_pid(){crate::graphics::release_if_owner(pid)}
+    if let Some(pid)=current_pid(){crate::graphics::release_if_owner(pid);crate::input::release_if_owner(pid)}
     let (parent, files, adopted)=with_manager(|m| {
         let p = m.current.as_mut().expect("exit without process");
         p.state = ProcessState::Exited;
@@ -235,7 +235,7 @@ pub fn exit(code: i32) {
     if adopted{crate::scheduler::wake(ProcessId(1))}
 }
 pub fn fault(vector: u64, address: u64) {
-    if let Some(pid)=current_pid(){crate::graphics::release_if_owner(pid)}
+    if let Some(pid)=current_pid(){crate::graphics::release_if_owner(pid);crate::input::release_if_owner(pid)}
     let (parent, files, adopted)=with_manager(|m| {
         let p = m.current.as_mut().expect("fault without process");
         p.state = ProcessState::Faulted;
@@ -399,6 +399,8 @@ pub fn terminate_child(pid:ProcessId,code:i32)->Result<(),i64>{
   for descendant in &mut m.others {if descendant.parent==Some(pid){descendant.parent=Some(ProcessId(1));descendant.orphan=true;adopted=true}}
   Ok((files,adopted))
  })?;
+ crate::graphics::release_if_owner(pid);
+ crate::input::release_if_owner(pid);
  drop(files);
  crate::scheduler::kill_process_threads(pid);
  if adopted{crate::scheduler::wake(ProcessId(1))}

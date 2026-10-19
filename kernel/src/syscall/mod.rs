@@ -55,6 +55,8 @@ extern "C" fn nova_syscall_dispatch(number:u64,a:u64,b:u64,c:u64)->i64 {
   abi::TTY_CLEAR=>{process::clear_output();0},
   abi::KILL=>process::terminate_child(process::ProcessId(a),b as i32).map_or_else(|e|e,|_|0),
   abi::WAIT_TRY=>wait_try(a,b),
+  abi::INPUT_ACQUIRE=>process::current_pid().ok_or(-1i64).and_then(crate::input::acquire).map_or_else(|e|e,|_|0),
+  abi::INPUT_RELEASE=>process::current_pid().ok_or(-1i64).and_then(crate::input::release).map_or_else(|e|e,|_|0),
   _=>-38,
  }
 }
@@ -137,14 +139,15 @@ fn read_tty(addr:u64,count:u64)->i64{
 }
 fn read_keyboard(addr:u64,count:u64)->i64{
  if count<16{return EINVAL}
+ let Some(pid)=process::current_pid()else{return EBADF};
  loop {
+  if !crate::input::owned_by(pid){return -1}
   if let Some(event)=crate::input::pop_raw(){
    let mut data=[0u8;16];data[0]=if event.pressed{1}else{2};data[1]=event.modifiers;
    data[2..4].copy_from_slice(&event.code.to_le_bytes());data[4]=event.key;
    data[8..16].copy_from_slice(&event.timestamp_ms.to_le_bytes());
    return copy_out(addr,&data).map_or_else(|e|e,|_|16)
   }
-  let Some(pid)=process::current_pid()else{return EBADF};
   if crate::input::wait_raw(pid).is_err(){return -16}
   scheduler::block_current();
  }

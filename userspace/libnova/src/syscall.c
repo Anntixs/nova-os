@@ -2,6 +2,7 @@
 #include <nova/process.h>
 #include <nova/fs.h>
 #include <nova/graphics.h>
+#include <nova/input.h>
 #include <stdlib.h>
 #include <string.h>
 char **nova_environ;
@@ -49,5 +50,7 @@ long nova_fb_acquire(void){return nova_syscall3(NOVA_SYS_FB_ACQUIRE,0,0,0);}
 long nova_fb_release(void){return nova_syscall3(NOVA_SYS_FB_RELEASE,0,0,0);}
 long nova_fb_fill(const struct nova_fb_fill *rect){return nova_syscall3(NOVA_SYS_FB_FILL,(long)rect,0,0);}
 long nova_fb_blit(const struct nova_fb_blit *rect){return nova_syscall3(NOVA_SYS_FB_BLIT,(long)rect,0,0);}
+long nova_input_acquire(void){return nova_syscall3(NOVA_SYS_INPUT_ACQUIRE,0,0,0);}
+long nova_input_release(void){return nova_syscall3(NOVA_SYS_INPUT_RELEASE,0,0,0);}
 void exit(int code){nova_syscall3(NOVA_SYS_EXIT,code,0,0);for(;;){}}
 void abort(void){exit(134);}

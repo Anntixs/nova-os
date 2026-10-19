@@ -42,8 +42,12 @@ All calls return `i64` in RAX: nonnegative success, negative Nova error. See [AB
 | 31 | TTY_CLEAR | — | — | — | 0 |
 | 32 | KILL | direct child PID | exit status | — | 0 |
 | 33 | WAIT_TRY | direct child PID | optional `i32*` status | — | child PID or `EAGAIN` |
+| 34 | INPUT_ACQUIRE | — | — | — | 0 or `EBUSY=-16` |
+| 35 | INPUT_RELEASE | — | — | — | 0 or `EPERM=-1` |
 
 These are the implemented Foundation extensions to the original ABI 0.3 table above. `WAIT(0)` is reserved for init's adopted-orphan reaper. Pipes carry a bounded byte stream; channels preserve message boundaries. `THREAD_CREATE` starts a new thread in the caller's address space and requires an already mapped userspace stack. `FB_*` uses a single process lease. See [IPC.md](IPC.md) and [GRAPHICS.md](GRAPHICS.md).
+
+`INPUT_ACQUIRE` grants one process exclusive access to raw `/dev/kbd0` records and suppresses keyboard delivery to the TTY until `INPUT_RELEASE` or owner termination. A new owner starts with an empty raw queue. A keyboard read without ownership returns `EPERM=-1`. This is a BSP-only input-seat foundation.
 
 ## EXPERIMENTAL
 

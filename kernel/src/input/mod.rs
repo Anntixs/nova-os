@@ -37,8 +37,31 @@ static RAW_HEAD: AtomicUsize = AtomicUsize::new(0);
 static RAW_TAIL: AtomicUsize = AtomicUsize::new(0);
 static RAW_WAITER: AtomicU64 = AtomicU64::new(0);
 static DROPPED: AtomicUsize = AtomicUsize::new(0);
+static OWNER: AtomicU64 = AtomicU64::new(0);
 static HEAD: AtomicUsize = AtomicUsize::new(0);
 static TAIL: AtomicUsize = AtomicUsize::new(0);
+pub fn captured()->bool{OWNER.load(Ordering::Acquire)!=0}
+pub fn owned_by(pid:crate::process::ProcessId)->bool{OWNER.load(Ordering::Acquire)==pid.0}
+pub fn acquire(pid:crate::process::ProcessId)->Result<(),i64>{
+ if pid.0==0{return Err(-22)}
+ match OWNER.compare_exchange(0,pid.0,Ordering::AcqRel,Ordering::Acquire){
+  Ok(_)=>{
+   // The caller enters with interrupts disabled in the syscall path. Old
+   // shell keystrokes must not be delivered to the new raw-input owner.
+   RAW_TAIL.store(RAW_HEAD.load(Ordering::Acquire),Ordering::Release);
+   TAIL.store(HEAD.load(Ordering::Acquire),Ordering::Release);
+   Ok(())
+  },
+  Err(old) if old==pid.0=>Ok(()),
+  Err(_)=>Err(-16),
+ }
+}
+pub fn release(pid:crate::process::ProcessId)->Result<(),i64>{
+ OWNER.compare_exchange(pid.0,0,Ordering::AcqRel,Ordering::Acquire).map_err(|_|-1)?;
+ RAW_WAITER.store(0,Ordering::Release);
+ Ok(())
+}
+pub fn release_if_owner(pid:crate::process::ProcessId){let _=release(pid);}
 pub fn push(event: KeyEvent) {
     let raw_head=RAW_HEAD.load(Ordering::Relaxed);
     let raw_next=(raw_head+1)%128;
@@ -49,6 +72,9 @@ pub fn push(event: KeyEvent) {
     // runs with IF clear, so it cannot race this slot write on the BSP.
     unsafe{(*RAW.0.get())[raw_head]=event};
     RAW_HEAD.store(raw_next,Ordering::Release);
+    // Route a captured key only to the raw owner. Enqueuing it for the TTY
+    // would allow delayed host-loop service to echo it after lease release.
+    if captured(){return}
     let head = HEAD.load(Ordering::Relaxed);
     let next = (head + 1) % 128;
     if next == TAIL.load(Ordering::Acquire) {

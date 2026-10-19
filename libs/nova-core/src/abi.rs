@@ -32,6 +32,8 @@ pub const FB_BLIT:u64=30;
 pub const TTY_CLEAR:u64=31;
 pub const KILL:u64=32;
 pub const WAIT_TRY:u64=33;
+pub const INPUT_ACQUIRE:u64=34;
+pub const INPUT_RELEASE:u64=35;
 // Numbers added for ABI 0.3 are reserved here only when implemented by the kernel.
 pub const ENOENT:i64=-2;
 pub const EIO:i64=-5;

@@ -66,6 +66,10 @@ try:
     for command in commands:
         before = log.read_text(errors="replace").count("$ ")
         send(command)
+        if command == "devtest":
+            wait_for("[devtest] keyboard lease active")
+            proc.stdin.write(b"sendkey x\n")
+            proc.stdin.flush()
         if command == "fbtest":
             wait_for("[fbtest] framebuffer lease active")
             shot = BUILD / "nova-fb-lease.ppm"
@@ -73,18 +77,17 @@ try:
             proc.stdin.write(f"screendump {shot}\n".encode())
             proc.stdin.flush()
             deadline = time.monotonic() + 3
-            while not shot.is_file() and time.monotonic() < deadline:
+            while time.monotonic() < deadline:
+                ppm = shot.read_bytes() if shot.is_file() else b""
+                header = re.match(rb"P6\s+(\d+)\s+(\d+)\s+255\s", ppm)
+                if header:
+                    width, height = int(header[1]), int(header[2])
+                    pixels = ppm[header.end():]
+                    if len(pixels) == width * height * 3:
+                        break
                 time.sleep(0.02)
-            if not shot.is_file():
-                raise AssertionError("Framebuffer lease screenshot was not captured")
-            ppm = shot.read_bytes()
-            header = re.match(rb"P6\s+(\d+)\s+(\d+)\s+255\s", ppm)
-            if not header:
-                raise AssertionError("Invalid QEMU PPM screenshot")
-            width, height = int(header[1]), int(header[2])
-            pixels = ppm[header.end():]
-            if len(pixels) != width * height * 3:
-                raise AssertionError("Truncated QEMU screenshot")
+            else:
+                raise AssertionError("QEMU framebuffer screenshot was not completed")
             # The full framebuffer is blue. Text drawn by the kernel terminal
             # during the lease would introduce light-gray glyph pixels.
             if any(pixels[(y * width + x) * 3:(y * width + x) * 3 + 3] != b"\x24\x5c\xa8"
@@ -116,6 +119,9 @@ try:
     proc.stdin.flush()
     time.sleep(0.3)
     content=log.read_text(errors="replace")
+    key_section = content.split("[devtest] keyboard lease active", 1)[1].split("Device test passed", 1)[0]
+    if "x" in key_section:
+        raise AssertionError("Raw keyboard key leaked into the TTY during input lease")
     expected = ("Nova OS 0.6.0", "launching /system/init as PID 1", "NovaShell (Ring 3)", "null", "zero", "meminfo", "UptimeMilliseconds:", "Nova system information", "PID 1", "Uptime:", "PATH=/bin", "Device test passed. Framebuffer", "Framebuffer test passed.", "Hello from Nova C userspace!", "Malloc test passed.", "Memory test passed. Invalid access isolated.", "C spawn test passed:", "Scheduler test passed.", "Userspace thread test passed.", "Pipe test passed.", "Message channel test passed.", "GS syscall and timer entry test passed.", "Orphan test spawned PID", "orphan PID", "Kill test passed.", "Killed PID", "argc = 4", "argv[3] = hello nova", "Nova works", "fault vector 14", "fault vector 6", "Invalid pointer rejected", "Invalid syscall rejected", "Nova stderr works.", "Syscall validation passed.", "Hello from Nova userspace!")
     for marker in expected:
         if marker not in content: raise AssertionError(f"Missing {marker!r} in {log}")

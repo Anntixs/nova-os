@@ -19,6 +19,7 @@ pub fn init(){
 }
 pub fn service(){
  while let Some(event)=input::pop(){
+  if input::captured(){continue}
   if !event.pressed{continue}
   let wake=with_tty(|tty|match event.key {
    b'\n'=>{
