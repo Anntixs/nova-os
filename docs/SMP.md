@@ -8,7 +8,7 @@ If an IPI fails or an AP misses its acknowledgement deadline, BSP stops starting
 
 **Only the BSP is scheduler-online.** AP acknowledgement proves execution of Nova AP code, not multi-CPU task scheduling. `/proc/cpuinfo` separates discovered CPUs, APs that entered Nova, and CPUs admitted to the scheduler. The AP limit is eight preallocated slots. If NovaBoot cannot reserve a suitable low page, the kernel continues on the BSP.
 
-The optional `NOVA_SMPTEST=1` build mode runs 256 physical-frame and heap allocation/verification cycles on each AP. QEMU with four CPUs completed this cross-CPU allocator probe and the normal userspace regression. Process/scheduler locks now use atomic exclusion in addition to local IRQ masking, but their single `current`/host context still prevents AP scheduling. IPC queue state has atomic exclusion; blocking/wakeup across active scheduler CPUs remains untested.
+The optional `NOVA_SMPTEST=1` build mode runs 256 physical-frame and heap allocation/verification cycles on each AP. QEMU with four CPUs completed this cross-CPU allocator probe and the normal userspace regression. The scheduler now has a pinned host context, host CR3 and current-thread slot for each of eight CPU records; only the BSP slot is used to run threads. The process manager still has a single `current` process and the scheduler lacks a safe cross-CPU context-switch handoff. IPC queue state has atomic exclusion; blocking/wakeup across active scheduler CPUs remains untested.
 
 The syscall entry no longer uses global stack/RSP scratch variables: it obtains both from a trusted CPU-local GS record. First Ring 3 entry, syscall, IRQ and fatal exception paths pair their GS transitions. A userspace regression program loads a null GS selector, exercises syscalls and waits for a timer IRQ, then confirms that the kernel remains alive. The scheduler and process manager still need CPU-local running context before this can be used for AP user threads.
 
@@ -16,4 +16,4 @@ The QEMU startup and userspace regression matrix passed with `-smp 1`, `2`, `4`,
 
 ## PLANNED before Stage B
 
-Per-CPU scheduler host/current state, CPU-safe process and VFS tables, AP syscall entry stacks, TLB shootdown, interrupt-safe blocking synchronization, reschedule IPIs and concurrent stress tests. Existing locks that only clear local IF are not SMP-safe. No NVMe/AHCI/USB work should begin until this stage is stable.
+CPU-local process ownership, a safe context-switch handoff, CPU-safe process and VFS tables, AP syscall entry stacks, TLB shootdown, interrupt-safe blocking synchronization, reschedule IPIs and concurrent stress tests. Existing locks that only clear local IF are not SMP-safe. No NVMe/AHCI/USB work should begin until this stage is stable.

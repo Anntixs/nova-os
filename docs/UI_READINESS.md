@@ -9,7 +9,7 @@
 
 ## BLOCKING GAPS BEFORE A ROBUST DISPLAY SERVER
 
-- The process scheduler still runs only on the BSP. APs enter Nova code and have private CPU state, but no user tasks are dispatched to them. Cross-CPU thread handoff, per-CPU current process and TLB shootdown must be completed and stress-tested before enabling AP scheduling.
+- The process scheduler still runs only on the BSP. APs enter Nova code and have private CPU state, but no user tasks are dispatched to them. The scheduler now has per-CPU host/current slots; cross-CPU thread handoff, per-CPU current process and TLB shootdown must be completed and stress-tested before enabling AP scheduling.
 - Framebuffer ownership and kernel console handback are serialized only by the BSP execution model. A shared graphics lock or equivalent handoff protocol is required before multiple CPUs can render.
 - The framebuffer interface copies pixels through syscalls. It has no page-backed surface, direct safe mapping, dirty-region batching or asynchronous present operation. A compositor can be prototyped with copies, but performance has not been measured.
 - The raw keyboard lease prevents delivery to the TTY but has no focus policy, multi-seat support, pointer events or privileged revocation. Keyboard input ownership needs a broader device/session policy before general GUI clients can receive input safely.

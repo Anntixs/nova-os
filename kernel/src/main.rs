@@ -244,8 +244,6 @@ pub extern "sysv64" fn _start(info: *const NovaBootInfo) -> ! {
     #[cfg(feature = "selftest")]
     userspace::elf::selftest(info, nx);
     #[cfg(feature = "selftest")]
-    scheduler::selftest();
-    #[cfg(feature = "selftest")]
     memory::selftest::run(info);
     let topology=platform::acpi::discover(info).unwrap_or_else(|e|panic!("ACPI topology: {:?}",e));
     arch::x86_64::percpu::set_discovered(topology.processor_count);
@@ -258,6 +256,8 @@ pub extern "sysv64" fn _start(info: *const NovaBootInfo) -> ! {
         .unwrap_or_else(|_| panic!("APIC initialization failed"));
     arch::x86_64::percpu::init_current(0,arch::x86_64::apic::local_id() as u32,0);
     arch::x86_64::percpu::set_state(0,arch::x86_64::percpu::State::Running);
+    #[cfg(feature = "selftest")]
+    scheduler::selftest();
     nova_log!(Info, "INT", "Local APIC and IOAPIC initialized");
     interrupts::timer::init();
     nova_log!(Info, "TIME", "PIT timer initialized");

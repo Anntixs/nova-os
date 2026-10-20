@@ -7,16 +7,24 @@ use alloc::{boxed::Box, collections::VecDeque, vec::Vec};
 use core::{cell::UnsafeCell,sync::atomic::{AtomicBool,Ordering}};
 
 struct Scheduler {
-    host: Context,
-    host_cr3: u64,
+    cpus: [CpuRun; 8],
     threads: Vec<Option<Box<Thread>>>,
     ready: VecDeque<usize>,
-    current: Option<usize>,
     next_tid: u64,
 }
+struct CpuRun {
+    host: Context,
+    host_cr3: u64,
+    current: Option<usize>,
+}
+impl CpuRun {
+    const fn new() -> Self { Self { host: Context::new(0), host_cr3: 0, current: None } }
+}
+fn cpu_index() -> usize { crate::arch::x86_64::percpu::current_logical() }
 struct Cell(UnsafeCell<Option<Scheduler>>,AtomicBool);
 // SAFETY: the atomic lock and local IRQ masking serialize all scheduler state.
-// The host/current context is still BSP-only, so APs cannot schedule yet.
+// Each CPU has its own host/current slot. AP scheduling is still disabled:
+// process ownership and the context-switch handoff are not SMP-safe yet.
 unsafe impl Sync for Cell {}
 static SCHED: Cell = Cell(UnsafeCell::new(None),AtomicBool::new(false));
 
@@ -78,14 +86,15 @@ fn with_sched<R>(f: impl FnOnce(&mut Scheduler) -> R) -> R {
 }
 pub fn init() {
     cpu::disable_interrupts();
-    // SAFETY: called once on the bootstrap CPU before the shell enables interrupts.
+    // SAFETY: called once on the bootstrap CPU before the scheduler and APs
+    // access this cell. CPU 0's host CR3 is captured before it runs threads.
     unsafe {
+        let mut cpus = core::array::from_fn(|_| CpuRun::new());
+        cpus[0].host_cr3 = cpu::read_cr3();
         *SCHED.0.get() = Some(Scheduler {
-            host: Context::new(0),
-            host_cr3: cpu::read_cr3(),
+            cpus,
             threads: Vec::new(),
             ready: VecDeque::new(),
-            current: None,
             next_tid: 1,
         });
     }
@@ -113,10 +122,10 @@ pub fn spawn_user(pid:ProcessId,entry:u64,stack:u64)->ThreadId {
     crate::process::add_thread(pid,tid);tid
 }
 pub fn current_user_entry_stack()->Option<(u64,u64)>{with_sched(|s|{
-    let index=s.current?;s.threads[index].as_ref()?.user_entry_stack
+    let index=s.cpus[cpu_index()].current?;s.threads[index].as_ref()?.user_entry_stack
 })}
 pub fn current_tid()->Option<ThreadId>{with_sched(|s|{
-    let index=s.current?;Some(s.threads[index].as_ref()?.tid)
+    let index=s.cpus[cpu_index()].current?;Some(s.threads[index].as_ref()?.tid)
 })}
 pub fn try_current_tid()->Option<ThreadId>{
  let enabled=cpu::interrupts_enabled();cpu::disable_interrupts();
@@ -124,26 +133,25 @@ pub fn try_current_tid()->Option<ThreadId>{
   if enabled{cpu::enable_interrupts()}return None
  }
  // SAFETY: lock excludes writers; scheduler may not exist during bootstrap.
- let tid=unsafe{(*SCHED.0.get()).as_ref().and_then(|s|s.current.and_then(|i|s.threads.get(i)?.as_ref().map(|t|t.tid)))};
+ let tid=unsafe{(*SCHED.0.get()).as_ref().and_then(|s|s.cpus[cpu_index()].current.and_then(|i|s.threads.get(i)?.as_ref().map(|t|t.tid)))};
  SCHED.1.store(false,Ordering::Release);
  if enabled{cpu::enable_interrupts()}tid
 }
 pub fn other_live_threads(pid:ProcessId)->bool{with_sched(|s|{
- let current=s.current;
- s.threads.iter().enumerate().any(|(i,slot)|Some(i)!=current&&slot.as_ref().is_some_and(|t|t.pid==pid&&!matches!(t.state,ThreadState::Exited|ThreadState::Faulted)))
+ s.threads.iter().enumerate().any(|(i,slot)|!s.cpus.iter().any(|cpu|cpu.current==Some(i))&&slot.as_ref().is_some_and(|t|t.pid==pid&&!matches!(t.state,ThreadState::Exited|ThreadState::Faulted)))
 })}
 pub fn run() {
     loop {
         let pair = with_sched(|s| {
             let i = s.ready.pop_front()?;
-            s.current = Some(i);
+            s.cpus[cpu_index()].current = Some(i);
             let thread=s.threads[i].as_mut().expect("ready thread missing");
             thread.state = ThreadState::Running;
             crate::process::mark_running(thread.pid);
             let top = thread.kernel_stack_top();
             crate::arch::x86_64::gdt::set_rsp0(top);
             crate::arch::x86_64::syscall::set_stack(top);
-            Some((&raw mut s.host, &raw const thread.context))
+            Some((&raw mut s.cpus[cpu_index()].host, &raw const thread.context))
         });
         let Some((old, new)) = pair else {
             crate::tty::service();
@@ -165,7 +173,7 @@ pub fn run() {
         unsafe {
             context::switch(old, new);
         }
-        let host_cr3 = with_sched(|s| s.host_cr3);
+        let host_cr3 = with_sched(|s| s.cpus[cpu_index()].host_cr3);
         cpu::write_cr3(host_cr3);
         if enabled {
             cpu::enable_interrupts();
@@ -177,12 +185,12 @@ pub fn run() {
 }
 pub fn yield_current() {
     let (old, new) = with_sched(|s| {
-        let i = s.current.take().expect("yield without running thread");
+        let i = s.cpus[cpu_index()].current.take().expect("yield without running thread");
         let thread=s.threads[i].as_mut().expect("current thread missing");
         thread.state = ThreadState::Ready;
         crate::process::mark_ready(thread.pid);
         s.ready.push_back(i);
-        (&raw mut thread.context, &raw const s.host)
+        (&raw mut thread.context, &raw const s.cpus[cpu_index()].host)
     });
     // SAFETY: both contexts are pinned and live. The scheduler state is committed
     // before the transfer, and no Rust reference spans it.
@@ -192,10 +200,10 @@ pub fn yield_current() {
 }
 pub fn exit_current() -> ! {
     let (old, new) = with_sched(|s| {
-        let i = s.current.take().expect("exit without running thread");
+        let i = s.cpus[cpu_index()].current.take().expect("exit without running thread");
         let thread=s.threads[i].as_mut().expect("current thread missing");
         thread.state = ThreadState::Exited;
-        (&raw mut thread.context, &raw const s.host)
+        (&raw mut thread.context, &raw const s.cpus[cpu_index()].host)
     });
     // SAFETY: the exited stack remains allocated until the run loop returns.
     unsafe {
@@ -206,17 +214,17 @@ pub fn exit_current() -> ! {
 
 pub fn block_current() {
  let pair=with_sched(|s|{
-  let i=s.current.expect("block without running thread");
+  let i=s.cpus[cpu_index()].current.expect("block without running thread");
   if s.threads[i].as_ref().expect("current thread missing").wake_pending {
    s.threads[i].as_mut().unwrap().wake_pending=false;
    return None;
   }
-  s.current=None;
+  s.cpus[cpu_index()].current=None;
   let thread=s.threads[i].as_mut().expect("current thread missing");
   thread.state=ThreadState::Blocked;
   thread.waiting_for=None;
   crate::process::mark_blocked(thread.pid);
-  Some((&raw mut thread.context,&raw const s.host))
+  Some((&raw mut thread.context,&raw const s.cpus[cpu_index()].host))
  });
  let Some((old,new))=pair else{return};
  // SAFETY: the blocked thread owns its pinned kernel stack. Its context remains
@@ -225,7 +233,7 @@ pub fn block_current() {
 }
 pub fn exit_thread()->! {
  let (old,new)=with_sched(|s|{
-  let i=s.current.take().expect("thread exit without running thread");
+  let i=s.cpus[cpu_index()].current.take().expect("thread exit without running thread");
   let tid=s.threads[i].as_ref().unwrap().tid;
   s.threads[i].as_mut().unwrap().state=ThreadState::Exited;
   for (j,slot) in s.threads.iter_mut().enumerate(){
@@ -233,7 +241,7 @@ pub fn exit_thread()->! {
     thread.waiting_for=None;thread.state=ThreadState::Ready;s.ready.push_back(j);
    }}
   }
-  (&raw mut s.threads[i].as_mut().unwrap().context,&raw const s.host)
+  (&raw mut s.threads[i].as_mut().unwrap().context,&raw const s.cpus[cpu_index()].host)
  });
  // SAFETY: the exited thread's context and kernel stack remain pinned until JOIN
  // reaps them. The host scheduler context remains live on the BSP stack.
@@ -246,7 +254,7 @@ pub fn join(tid:ThreadId)->Result<(),i64>{
   // Inspect the target and register the waiter under the same lock. Otherwise
   // the target can exit between those steps and its wakeup is lost forever.
   let pending=with_sched(|s|{
-   let current=s.current.ok_or(-3i64)?;
+   let current=s.cpus[cpu_index()].current.ok_or(-3i64)?;
    if s.threads[current].as_ref().unwrap().tid==tid{return Err(-22i64)}
    let index=s.threads.iter().position(|slot|slot.as_ref().is_some_and(|t|t.tid==tid&&t.pid==pid)).ok_or(-3i64)?;
    if s.threads[index].as_ref().unwrap().state==ThreadState::Exited {
@@ -256,8 +264,8 @@ pub fn join(tid:ThreadId)->Result<(),i64>{
    thread.state=ThreadState::Blocked;
    thread.waiting_for=Some(tid);
    crate::process::mark_blocked(pid);
-   s.current=None;
-   Ok::<Option<(*mut Context,*const Context)>,i64>(Some((&raw mut thread.context,&raw const s.host)))
+   s.cpus[cpu_index()].current=None;
+   Ok::<Option<(*mut Context,*const Context)>,i64>(Some((&raw mut thread.context,&raw const s.cpus[cpu_index()].host)))
   })?;
   let Some((old,new))=pending else {crate::process::remove_thread(tid);return Ok(())};
   // SAFETY: the blocked thread's pinned context remains owned by the scheduler
@@ -266,9 +274,8 @@ pub fn join(tid:ThreadId)->Result<(),i64>{
  }
 }
 pub fn kill_process_threads(pid:ProcessId){with_sched(|s|{
- let active=s.current;
  for (i,slot) in s.threads.iter_mut().enumerate(){
-  if Some(i)!=active{if let Some(t)=slot.as_mut(){if t.pid==pid{t.state=ThreadState::Exited}}}
+  if !s.cpus.iter().any(|cpu|cpu.current==Some(i)){if let Some(t)=slot.as_mut(){if t.pid==pid{t.state=ThreadState::Exited}}}
  }
  s.ready.retain(|i|s.threads[*i].as_ref().is_some_and(|t|t.state==ThreadState::Ready));
 })}
@@ -293,6 +300,6 @@ pub fn has_ready()->bool {with_sched(|s|!s.ready.is_empty())}
 /// kernel stack. The IRQ stub preserves volatile GPRs and FPU state; this
 /// context resumes inside the same IRQ handler and eventually executes IRETQ.
 pub fn preempt_if_running() {
-    let should_switch = with_sched(|s| s.current.is_some() && !s.ready.is_empty());
+    let should_switch = with_sched(|s| s.cpus[cpu_index()].current.is_some() && !s.ready.is_empty());
     if should_switch { yield_current(); }
 }
