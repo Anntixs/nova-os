@@ -133,7 +133,10 @@ pub fn try_current_tid()->Option<ThreadId>{
   if enabled{cpu::enable_interrupts()}return None
  }
  // SAFETY: lock excludes writers; scheduler may not exist during bootstrap.
- let tid=unsafe{(*SCHED.0.get()).as_ref().and_then(|s|s.cpus[cpu_index()].current.and_then(|i|s.threads.get(i)?.as_ref().map(|t|t.tid)))};
+ let tid=unsafe{(*SCHED.0.get()).as_ref().and_then(|s|{
+  let cpu=crate::arch::x86_64::percpu::try_current_logical()?;
+  s.cpus[cpu].current.and_then(|i|s.threads.get(i)?.as_ref().map(|t|t.tid))
+ })};
  SCHED.1.store(false,Ordering::Release);
  if enabled{cpu::enable_interrupts()}tid
 }

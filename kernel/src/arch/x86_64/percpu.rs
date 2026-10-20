@@ -62,3 +62,15 @@ pub fn current_logical()->usize{
     unsafe{asm!("mov {}, gs:[0]",out(reg)id,options(nostack,readonly,preserves_flags))}
     id as usize
 }
+/// Diagnostic path for faults before GS_BASE has been installed. Reading the
+/// MSR avoids dereferencing an uninitialized GS pointer during panic output.
+pub fn try_current_logical()->Option<usize>{
+    let low:u32;
+    let high:u32;
+    // SAFETY: IA32_GS_BASE exists in x86_64 long mode. This function runs in
+    // ring 0; it does not dereference the returned value until it matches one
+    // of Nova's pinned CPU records exactly.
+    unsafe{asm!("rdmsr",in("ecx")0xc000_0101u32,out("eax")low,out("edx")high,options(nostack,preserves_flags))}
+    let base=(u64::from(high)<<32)|u64::from(low);
+    CPUS.iter().position(|cpu|cpu as *const PerCpu as u64==base)
+}
