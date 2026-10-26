@@ -173,7 +173,9 @@ pub fn add_thread(pid: ProcessId, tid: ThreadId) {
     });
 }
 pub fn remove_thread(tid:ThreadId){with_manager(|m|{
-    if let Some(p)=m.current.as_mut(){p.threads.retain(|&id|id!=tid)}
+    for p in m.current.iter_mut().chain(m.others.iter_mut()) {
+        p.threads.retain(|&id|id!=tid);
+    }
 })}
 pub fn mark_running(pid: ProcessId) {
     if pid.0 == 0 {

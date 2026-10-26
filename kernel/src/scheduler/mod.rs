@@ -141,7 +141,8 @@ pub fn try_current_tid()->Option<ThreadId>{
  if enabled{cpu::enable_interrupts()}tid
 }
 pub fn other_live_threads(pid:ProcessId)->bool{with_sched(|s|{
- s.threads.iter().enumerate().any(|(i,slot)|!s.cpus.iter().any(|cpu|cpu.current==Some(i))&&slot.as_ref().is_some_and(|t|t.pid==pid&&!matches!(t.state,ThreadState::Exited|ThreadState::Faulted)))
+ let own=s.cpus[cpu_index()].current;
+ s.threads.iter().enumerate().any(|(i,slot)|Some(i)!=own&&slot.as_ref().is_some_and(|t|t.pid==pid&&!matches!(t.state,ThreadState::Exited|ThreadState::Faulted)))
 })}
 pub fn run() {
     loop {
