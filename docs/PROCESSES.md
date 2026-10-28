@@ -10,6 +10,8 @@ The single CPU scheduler has a ready queue and blocked states for child wait, TT
 
 Processes can have additional userspace threads, each with a TID, independent 32 KiB kernel stack, caller-supplied mapped userspace stack and scheduler state. `THREAD_CREATE`, `THREAD_EXIT`, and `THREAD_JOIN` are implemented; `/bin/threadtest` exercises them. Spawn inherits open descriptors, including pipes/channels. A dying parent transfers its children to PID 1; init runs a reaper thread that blocks in `WAIT(0)` for adopted orphans. The direct parent can use blocking `WAIT` or `WAIT_TRY`. `KILL` currently targets only a direct child. User stacks have an unmapped lower guard page; the kernel stack has no guard page yet. `/bin/memtest` tests a user stack-guard fault and recovery.
 
+Kernel stacks are zero-initialized directly in heap storage. The previous `Box::new([0; 32768])` expression created a 32 KiB temporary on the caller's kernel stack in debug builds; creating init's reaper thread overflowed that stack and corrupted the process cwd. The heap-backed allocation was verified with the full QEMU init regression in debug mode. Kernel-stack guard pages remain planned.
+
 ## EXPERIMENTAL / PLANNED
 
 PID/TID values monotonically increase until reboot. Thread entry/stack ownership is the user's responsibility; there is no pthread ABI. No SMP, signals, process groups, permissions, per-process memory quotas or general capability rights yet. The kernel scheduler still uses the bootstrap CPU only.
