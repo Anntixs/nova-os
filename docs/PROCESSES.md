@@ -4,7 +4,7 @@
 
 PID 0 is reserved for kernel threads; kernel boot loads `/system/init` from VFS as PID 1. Init spawns `/bin/nsh`, and nsh spawns command ELF files. Every user process has a distinct address space, PID, parent PID, cwd, environment, file table, exit status and at least one thread with a dedicated 32 KiB kernel stack. `spawn` copies user arguments, reads the child ELF through VFS, creates PT_LOAD/stack mappings and places argc/argv/envp on the child stack. `wait` blocks the parent, then reaps the exited child and releases its address space and kernel stack. User faults mark only the offending process as faulted and wake its waiting parent. Child cwd and environment are inherited; standard FDs 0–2 refer to the shared terminal.
 
-The single CPU scheduler has a ready queue and blocked states for child wait, TTY read and sleep. `yield` rotates the queue; timer IRQs also preempt after a time slice. The scheduler host loop wakes sleepers and services TTY input. Kernel init and the emergency monitor run on the host kernel stack. Process globals currently mask interrupts on the bootstrap CPU for synchronization.
+The BSP scheduler has a ready queue and blocked states for child wait, TTY read and sleep. `yield` rotates the queue; timer IRQs also preempt after a time slice. The scheduler host loop wakes sleepers and services TTY input. Kernel init and the emergency monitor run on the host kernel stack. The process manager stores processes in a stable table and tracks the active PID per logical CPU. An atomic lock with local IRQ masking protects this table. Only the BSP schedules normal threads; CPU-local slots are preparation for AP scheduling, not evidence that it works.
 
 ## IMPLEMENTED — Foundation extensions
 
