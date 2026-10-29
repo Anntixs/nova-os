@@ -91,9 +91,9 @@ fn with_sched<R>(f: impl FnOnce(&mut Scheduler) -> R) -> R {
 /// Complete a thread's transition only after the CPU is back on its host
 /// stack. Until this point the old thread must remain unclaimable by APs.
 fn finish_switch() {
-    with_sched(|s| {
+    let exited = with_sched(|s| {
         let local = &mut s.cpus[cpu_index()];
-        let Some(next) = local.pending.take() else { return };
+        let Some(next) = local.pending.take() else { return None };
         let index = local.current.take().expect("switch without current thread");
         debug_assert!(!s.ready.contains(&index), "active stack already queued");
         let thread = s.threads[index].as_mut().expect("switched thread missing");
@@ -137,7 +137,11 @@ fn finish_switch() {
             }
             _ => panic!("invalid scheduler switch target"),
         }
+        if next == ThreadState::Exited { Some(pid) } else { None }
     });
+    // The old stack is no longer active. Notify a waiting parent only now;
+    // an earlier wake could let it free this thread's address space.
+    if let Some(pid) = exited { crate::process::notify_quiescent(pid); }
 }
 pub fn init() {
     cpu::disable_interrupts();
@@ -442,6 +446,14 @@ pub fn kill_process_threads(pid:ProcessId){with_sched(|s|{
   if !s.cpus.iter().any(|cpu|cpu.current==Some(i)){if let Some(t)=slot.as_mut(){if t.pid==pid{t.state=ThreadState::Exited}}}
  }
  s.ready.retain(|i|s.threads[*i].as_ref().is_some_and(|t|t.state==ThreadState::Ready));
+})}
+/// No CPU owns a stack from this process and no runnable or blocked thread
+/// can resume inside its address space.
+pub fn process_quiesced(pid:ProcessId)->bool{with_sched(|s|{
+ s.threads.iter().enumerate().all(|(i,slot)|{
+  slot.as_ref().is_none_or(|t|t.pid!=pid||
+   t.state==ThreadState::Exited&&!s.cpus.iter().any(|cpu|cpu.current==Some(i)))
+ })
 })}
 pub fn wake(pid:ProcessId) {
  with_sched(|s|{

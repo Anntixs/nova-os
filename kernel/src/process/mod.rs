@@ -206,7 +206,7 @@ pub fn mark_running(pid: ProcessId) {
     with_manager(|m| {
         let p = m.find_mut(pid).expect("run without process");
         assert_eq!(p.pid, pid);
-        p.state = ProcessState::Running;
+        if !matches!(p.state,ProcessState::Exited|ProcessState::Faulted){p.state = ProcessState::Running;}
         m.current[Manager::cpu_slot()] = Some(pid);
     });
 }
@@ -217,10 +217,10 @@ pub fn mark_ready(pid: ProcessId) {
     with_manager(|m| {
         let p = m.find_mut(pid).expect("yield without process");
         assert_eq!(p.pid, pid);
-        p.state = ProcessState::Ready;
+        if !matches!(p.state,ProcessState::Exited|ProcessState::Faulted){p.state = ProcessState::Ready;}
     });
 }
-pub fn mark_blocked(pid:ProcessId){if pid.0!=0{with_manager(|m|{m.find_mut(pid).expect("block without process").state=ProcessState::Blocked;});}}
+pub fn mark_blocked(pid:ProcessId){if pid.0!=0{with_manager(|m|{let p=m.find_mut(pid).expect("block without process");if !matches!(p.state,ProcessState::Exited|ProcessState::Faulted){p.state=ProcessState::Blocked;}});}}
 pub fn space_root() -> Option<u64> {
     with_manager(|m| {
         m.active()?
@@ -241,8 +241,7 @@ pub fn exit(code: i32) {
     if let Some(pid)=current_pid(){crate::graphics::release_if_owner(pid);crate::input::release_if_owner(pid)}
     let (parent, files, adopted)=with_manager(|m| {
         let p = m.active_mut().expect("exit without process");
-        p.state = ProcessState::Exited;
-        p.exit_code = Some(code);
+        if !matches!(p.state,ProcessState::Exited|ProcessState::Faulted){p.state = ProcessState::Exited;p.exit_code = Some(code);}
         let parent=p.parent;let dead=p.pid;let files=core::mem::take(&mut p.files);
         let mut adopted=false;
         if dead.0!=1 {for child in &mut m.processes {if child.parent==Some(dead){child.parent=Some(ProcessId(1));child.orphan=true;adopted=true;}}}
@@ -387,20 +386,32 @@ pub fn next_dir_entry(fd:u64)->Result<Option<crate::fs::vfs::Node>,()> {
 
 #[derive(Clone,Copy,Debug)]
 pub enum ChildStatus {Running,Done(ProcessId,i32)}
+pub fn notify_quiescent(pid:ProcessId){
+ if !crate::scheduler::process_quiesced(pid){return}
+ let parent=with_manager(|m|m.processes.iter().find(|p|p.pid==pid).and_then(|p|p.parent));
+ if let Some(parent)=parent{crate::scheduler::wake(parent)}
+}
 pub fn child_status(pid:ProcessId)->Option<ChildStatus>{
- with_manager(|m|{
+ let candidates=with_manager(|m|{
   let parent=m.active()?.pid;
-  let child=if pid.0==0 {
-   m.processes.iter().filter(|p|p.parent==Some(parent)&&p.orphan).find(|p|matches!(p.state,ProcessState::Exited|ProcessState::Faulted))
-    .or_else(||m.processes.iter().find(|p|p.parent==Some(parent)&&p.orphan))?
-  }else{m.processes.iter().find(|p|p.pid==pid&&p.parent==Some(parent))?};
-  match child.state {ProcessState::Exited|ProcessState::Faulted=>Some(ChildStatus::Done(child.pid,child.exit_code.unwrap_or(-1))),_=>Some(ChildStatus::Running)}
- })
+  Some(m.processes.iter().filter(|p|p.parent==Some(parent)&&
+   (pid.0==0&&p.orphan||p.pid==pid)).map(|p|
+   (p.pid,matches!(p.state,ProcessState::Exited|ProcessState::Faulted),p.exit_code.unwrap_or(-1))).collect::<Vec<_>>())
+ })?;
+ for (child,done,code) in &candidates {
+  if *done&&crate::scheduler::process_quiesced(*child){return Some(ChildStatus::Done(*child,*code))}
+ }
+ if candidates.is_empty(){None}else{Some(ChildStatus::Running)}
 }
 pub fn reap_child(pid:ProcessId)->Result<(ProcessId,i32),&'static str>{
+ let candidates=with_manager(|m|{
+  let parent=m.active()?.pid;
+  Some(m.processes.iter().filter(|p|(p.pid==pid||pid.0==0&&p.orphan)&&p.parent==Some(parent)&&matches!(p.state,ProcessState::Exited|ProcessState::Faulted)).map(|p|p.pid).collect::<Vec<_>>())
+ }).ok_or("wait without parent")?;
+ let candidate=candidates.into_iter().find(|&id|crate::scheduler::process_quiesced(id)).ok_or("child threads still active")?;
  let (mut child,info)=with_manager(|m|{
   let parent=m.active().ok_or("wait without parent")?.pid;
-  let index=m.processes.iter().position(|p|(p.pid==pid||pid.0==0&&p.orphan)&&p.parent==Some(parent)&&matches!(p.state,ProcessState::Exited|ProcessState::Faulted)).ok_or("child not exited")?;
+  let index=m.processes.iter().position(|p|p.pid==candidate&&p.parent==Some(parent)&&matches!(p.state,ProcessState::Exited|ProcessState::Faulted)).ok_or("child not exited")?;
   Ok::<_,&'static str>((m.processes.swap_remove(index),m.boot_info))
  })?;
  let code=child.exit_code.unwrap_or(-1);
