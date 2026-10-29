@@ -29,6 +29,20 @@ int main(void) {
         if (tid < 0 || nova_thread_join(tid) < 0 || short_lived_done != i + 1) return 6;
     }
     if (nova_unmap(a, 16384) < 0 || nova_unmap(b, 16384) < 0) return 5;
+    for (unsigned round = 0; round < 32; ++round) {
+        unsigned char *pages = nova_map(4 * 4096, 3);
+        if (!pages) return 7;
+        for (unsigned page = 0; page < 4; ++page) {
+            pages[page * 4096] = (unsigned char)(round + page);
+            pages[page * 4096 + 4095] = (unsigned char)(round ^ page);
+        }
+        for (unsigned page = 0; page < 4; ++page) {
+            if (pages[page * 4096] != (unsigned char)(round + page) ||
+                pages[page * 4096 + 4095] != (unsigned char)(round ^ page)) return 8;
+        }
+        if (nova_unmap(pages, 4 * 4096) < 0) return 9;
+    }
+    puts("Userspace map/unmap reuse test passed.");
     puts("Userspace thread test passed.");
     return 0;
 }

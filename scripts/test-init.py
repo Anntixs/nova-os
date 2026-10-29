@@ -123,6 +123,7 @@ try:
     if "x" in key_section:
         raise AssertionError("Raw keyboard key leaked into the TTY during input lease")
     expected = ("Nova OS 0.6.0", "launching /system/init as PID 1", "NovaShell (Ring 3)", "null", "zero", "meminfo", "UptimeMilliseconds:", "Nova system information", "PID 1", "Uptime:", "PATH=/bin", "Device test passed. Framebuffer", "Framebuffer test passed.", "Hello from Nova C userspace!", "Malloc test passed.", "Memory test passed. Invalid access isolated.", "C spawn test passed:", "Scheduler test passed.", "Userspace thread test passed.", "Pipe test passed.", "Message channel test passed.", "GS syscall and timer entry test passed.", "Orphan test spawned PID", "orphan PID", "Kill test passed.", "Killed PID", "argc = 4", "argv[3] = hello nova", "Nova works", "fault vector 14", "fault vector 6", "Invalid pointer rejected", "Invalid syscall rejected", "Nova stderr works.", "Syscall validation passed.", "Hello from Nova userspace!")
+    expected += ("Userspace map/unmap reuse test passed.",)
     for marker in expected:
         if marker not in content: raise AssertionError(f"Missing {marker!r} in {log}")
     requested_cpus = int(os.environ.get("NOVA_SMP", "1"))
