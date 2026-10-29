@@ -95,6 +95,15 @@ struct Cell(UnsafeCell<Option<Manager>>,AtomicBool);
 // scheduling remains disabled until the rest of the SMP audit is complete.
 unsafe impl Sync for Cell {}
 static MANAGER: Cell = Cell(UnsafeCell::new(None),AtomicBool::new(false));
+static OUTPUT_LOCK: AtomicBool = AtomicBool::new(false);
+fn with_output<R>(f:impl FnOnce()->R)->R{
+    let enabled=cpu::interrupts_enabled();cpu::disable_interrupts();
+    while OUTPUT_LOCK.compare_exchange(false,true,Ordering::Acquire,Ordering::Relaxed).is_err(){core::hint::spin_loop()}
+    let result=f();
+    OUTPUT_LOCK.store(false,Ordering::Release);
+    if enabled{cpu::enable_interrupts()}
+    result
+}
 fn with_manager<R>(f: impl FnOnce(&mut Manager) -> R) -> R {
     let enabled = cpu::interrupts_enabled();
     cpu::disable_interrupts();
@@ -269,20 +278,23 @@ pub fn fault(vector: u64, address: u64) {
     );
 }
 pub fn output_byte(byte: u8) {
-    let ptr = with_manager(|m| m.output);
-    // SAFETY: the shell pins its Terminal on its suspended host stack while the
-    // user thread runs. Only that thread renders during this interval.
-    if !ptr.is_null() {
-        unsafe {
-            (*ptr).char(byte);
+    with_output(||{
+        let ptr = with_manager(|m| m.output);
+        // SAFETY: the host pins Terminal until finish() clears its pointer
+        // under OUTPUT_LOCK. That lock also excludes simultaneous renderers.
+        if !ptr.is_null() {
+            unsafe {
+                (*ptr).char(byte);
+            }
         }
-    }
+    });
 }
 pub fn clear_output(){
- let ptr=with_manager(|m|m.output);
- // SAFETY: the init host stack pins this terminal while userspace runs. The
- // syscall executes on one CPU with IF clear, so no other renderer is active.
- if !ptr.is_null(){unsafe{(*ptr).clear()}}
+ with_output(||{
+  let ptr=with_manager(|m|m.output);
+  // SAFETY: OUTPUT_LOCK excludes rendering and finish() until clear returns.
+  if !ptr.is_null(){unsafe{(*ptr).clear()}}
+ });
 }
 pub fn snapshot() -> Option<(ProcessId, ProcessState, &'static str)> {
     with_manager(|m| m.active().map(|p| (p.pid, p.state, p.name)))
@@ -300,13 +312,13 @@ pub fn fault_details() -> Option<(u64, u64)> {
 pub fn finish(
     info: &nova_core::NovaBootInfo,
 ) -> Result<(ProcessId, ProcessState, i32), &'static str> {
-    let mut process = with_manager(|m| {
+    let mut process = with_output(||with_manager(|m| {
         m.output = core::ptr::null_mut();
         let id=m.active_id().expect("no process");
         m.current[Manager::cpu_slot()]=None;
         let index=m.processes.iter().position(|p|p.pid==id).expect("active process missing");
         m.processes.swap_remove(index)
-    });
+    }));
     let result = (process.pid, process.state, process.exit_code.unwrap_or(-1));
     crate::scheduler::reap(process.pid);
     process.address_space.take().unwrap().destroy(info)?;
