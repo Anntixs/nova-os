@@ -92,12 +92,17 @@ impl AddressSpace {
         None
     }
     pub fn unmap_user(&self,va:u64)->Result<(),&'static str>{
+        let frame = self.detach_user(va)?;
+        physical::free_allocated_frame(frame).map_err(|_|"user frame release failed")
+    }
+    /// Remove a PTE without returning its frame to the allocator. The caller
+    /// must invalidate remote TLBs before freeing the returned frame.
+    pub fn detach_user(&self,va:u64)->Result<PhysFrame,&'static str>{
         if va<USER_BASE||va>=USER_END||va&4095!=0{return Err("invalid user unmap")}
         let old=cpu::read_cr3();let enabled=cpu::interrupts_enabled();cpu::disable_interrupts();
         self.activate();let result=paging::unmap_page(Page(VirtAddr(va)));
         cpu::write_cr3(old);if enabled{cpu::enable_interrupts()}
-        let frame=result.map_err(|_|"user page not mapped")?;
-        physical::free_allocated_frame(frame).map_err(|_|"user frame release failed")
+        result.map_err(|_|"user page not mapped")
     }
     pub fn destroy(self, info: &NovaBootInfo) -> Result<(), &'static str> {
         if cpu::read_cr3() & ADDR_MASK == self.root.address() {

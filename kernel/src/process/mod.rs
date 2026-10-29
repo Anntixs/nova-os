@@ -467,11 +467,40 @@ pub fn map_anonymous(length:u64,prot:u64,flags:u64)->Result<u64,i64>{
 pub fn unmap_anonymous(start:u64,length:u64)->Result<(),i64>{
  let len=length.checked_add(4095).ok_or(-22i64)?&!4095;
  if length==0||start&4095!=0{return Err(-22)}
- with_manager(|m|{
+ let frames=with_manager(|m|{
   let p=m.active_mut().ok_or(-22i64)?;
   let index=p.mappings.iter().position(|&(a,n)|a==start&&n==len).ok_or(-22i64)?;
   let space=p.address_space.as_ref().ok_or(-22i64)?;
-  for off in (0..len/4096).map(|i|i*4096){space.unmap_user(start+off).map_err(|_|-5i64)?;}
+  for off in (0..len/4096).map(|i|i*4096){
+   if space.translate_user(start+off,false).is_none(){return Err(-5i64)}
+  }
+  let mut frames=Vec::with_capacity((len/4096) as usize);
+  for off in (0..len/4096).map(|i|i*4096){
+   frames.push(space.detach_user(start+off).expect("validated user PTE disappeared"));
+  }
+  // Keep the range reserved until remote translations are invalidated.
+  debug_assert_eq!(p.mappings[index],(start,len));
+  Ok(frames)
+ })?;
+ // This may wait for AP interrupt handlers, so it must run outside the
+ // process-manager lock and with local interrupts enabled. If it fails,
+ // quarantine the detached frames rather than allow stale TLB use after free.
+ let interrupts_were_enabled=cpu::interrupts_enabled();
+ if !interrupts_were_enabled{cpu::enable_interrupts()}
+ let flush=crate::arch::x86_64::tlb::broadcast();
+ if !interrupts_were_enabled{cpu::disable_interrupts()}
+ if let Err(error)=flush{
+  crate::nova_log!(Error,"MEM","user unmap TLB flush failed: {}",error);
+  // The PTEs are gone, but a remote CPU may still have a translation.
+  // Intentionally retain the allocation bits for these frames.
+  return Err(-5);
+ }
+ for frame in frames {
+  crate::memory::physical::free_allocated_frame(frame).map_err(|_|-5i64)?;
+ }
+ with_manager(|m|{
+  let p=m.active_mut().ok_or(-5i64)?;
+  let index=p.mappings.iter().position(|&(a,n)|a==start&&n==len).ok_or(-5i64)?;
   p.mappings.swap_remove(index);Ok(())
  })
 }
