@@ -75,6 +75,9 @@ extern "sysv64" fn ap_enter(logical:u64)->!{
     idt::load();
     if crate::memory::paging::nx_enabled(){crate::memory::paging::enable_nx(true);}
     apic::enable_local();
+    // SYSCALL MSRs are local to each CPU. Prepare the same Nova ABI entry as
+    // the BSP before this AP can ever be admitted to user-thread scheduling.
+    super::syscall::init();
     percpu::set_state(logical as usize,percpu::State::Idle);
     REACHED.fetch_or(1u64<<logical,Ordering::Release);
     #[cfg(feature="smptest")]

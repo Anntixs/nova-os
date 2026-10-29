@@ -79,8 +79,17 @@ pub fn init() {
     }
 }
 pub fn set_rsp0(top: u64) {
-    // SAFETY: called on the bootstrap CPU for a live, pinned thread kernel stack.
-    unsafe { TSS.rsp[0] = top; }
+    let logical = super::percpu::current_logical();
+    // SAFETY: the caller runs on `logical` with local interrupts masked while
+    // selecting its next thread. Each CPU writes only its own pinned TSS;
+    // the selected thread owns `top` until it stops running on this CPU.
+    unsafe {
+        if logical == 0 {
+            TSS.rsp[0] = top;
+        } else {
+            (*AP_TABLES[logical].0.get()).tss.rsp[0] = top;
+        }
+    }
 }
 pub fn init_ap(logical:usize,stack_top:u64){
     assert!(logical<AP_TABLES.len());

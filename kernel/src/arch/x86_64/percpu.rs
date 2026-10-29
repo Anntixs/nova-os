@@ -1,5 +1,6 @@
 //! CPU-local identity and state. GS_BASE points to a pinned record. Scheduling
-//! user code on APs remains disabled until syscall and process state are local.
+//! user code on APs remains disabled until scheduler and shared-subsystem
+//! concurrency are verified. The syscall stack and process identity are local.
 use core::{arch::asm,mem::offset_of,sync::atomic::{AtomicU8,AtomicU32,AtomicU64,Ordering}};
 
 #[repr(u8)]
