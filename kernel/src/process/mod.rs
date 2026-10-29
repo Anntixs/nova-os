@@ -455,7 +455,7 @@ pub fn map_anonymous(length:u64,prot:u64,flags:u64)->Result<u64,i64>{
    let mut mapped=0;
    while mapped<len {
     if space.map_user(start+mapped,crate::memory::paging::PageFlags(bits)).is_err(){
-     for off in (0..mapped/4096).map(|i|i*4096){let _=space.unmap_user(start+off);}
+     for off in (0..mapped/4096).map(|i|i*4096){let _=space.rollback_unpublished_user(start+off);}
      return Err(-12)
     }
     mapped+=4096;

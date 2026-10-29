@@ -91,7 +91,9 @@ impl AddressSpace {
         }
         None
     }
-    pub fn unmap_user(&self,va:u64)->Result<(),&'static str>{
+    /// Roll back a page that was mapped while constructing an unpublished
+    /// region. Never use this for a page visible to another running thread.
+    pub fn rollback_unpublished_user(&self,va:u64)->Result<(),&'static str>{
         let frame = self.detach_user(va)?;
         physical::free_allocated_frame(frame).map_err(|_|"user frame release failed")
     }
