@@ -27,6 +27,9 @@ pub struct Thread {
     /// A wakeup delivered while this thread is still running. Consumed by the
     /// next block attempt so an event cannot be lost between enqueue and park.
     pub wake_pending: bool,
+    /// Set by a parent kill request while this CPU still owns the stack.
+    /// The next local timer or reschedule interrupt exits the thread safely.
+    pub kill_pending: bool,
     /// Until full SMP user scheduling is audited, threads stay on the BSP.
     /// Diagnostic kernel workers may be pinned to a specific AP.
     pub affinity: usize,
@@ -53,6 +56,7 @@ impl Thread {
             user_entry_stack: None,
             waiting_for: None,
             wake_pending: false,
+            kill_pending: false,
             affinity: 0,
         }
     }

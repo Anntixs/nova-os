@@ -323,6 +323,15 @@ static AP_WORK_FLUSHED:AtomicU64=AtomicU64::new(0);
 #[cfg(feature="smptest")]
 static AP_WORK_FLUSH_COUNT:AtomicU64=AtomicU64::new(0);
 #[cfg(feature="smptest")]
+static AP_STOP_ENTERED:AtomicU64=AtomicU64::new(0);
+#[cfg(feature="smptest")]
+extern "C" fn ap_stop_worker()->!{
+    let logical=cpu_index();
+    cpu::enable_interrupts();
+    AP_STOP_ENTERED.fetch_or(1u64<<logical,Ordering::Release);
+    loop { cpu::halt(); }
+}
+#[cfg(feature="smptest")]
 extern "C" fn ap_worker()->!{
     let logical=cpu_index();
     assert!(logical>0,"AP worker ran on BSP");
@@ -374,6 +383,28 @@ pub fn ap_selftest(){
     reap_ap_workers(&tids);
     crate::nova_log!(Info,"TEST","concurrent TLB flush passed on {} APs (16 rounds each)",started);
     crate::nova_log!(Info,"TEST","AP scheduler kernel workers passed on {} APs",started);
+    if started>0 {
+        let mut stop_tids=Vec::new();
+        for logical in 1..8 {
+            if expected&(1u64<<logical)!=0 {
+                stop_tids.push(spawn_ap_worker(logical,ap_stop_worker));
+                let id=crate::arch::x86_64::percpu::apic_id(logical).expect("AP stop worker APIC ID missing");
+                let id=u8::try_from(id).expect("AP stop worker xAPIC ID out of range");
+                crate::arch::x86_64::apic::send_ipi(id,241).expect("AP stop worker wake IPI failed");
+            }
+        }
+        let deadline=crate::interrupts::timer::uptime_ms().saturating_add(3000);
+        while AP_STOP_ENTERED.load(Ordering::Acquire)&expected!=expected
+            && crate::interrupts::timer::uptime_ms()<deadline {cpu::halt()}
+        assert_eq!(AP_STOP_ENTERED.load(Ordering::Acquire)&expected,expected,"AP stop workers did not start");
+        kill_process_threads(ProcessId(0));
+        let deadline=crate::interrupts::timer::uptime_ms().saturating_add(3000);
+        while !ap_workers_exited(&stop_tids)&&crate::interrupts::timer::uptime_ms()<deadline {cpu::halt()}
+        assert!(ap_workers_exited(&stop_tids),"AP stop IPI did not exit workers");
+        assert!(process_quiesced(ProcessId(0)),"AP kernel stacks still active after stop");
+        reap_ap_workers(&stop_tids);
+        crate::nova_log!(Info,"TEST","AP stop IPI and stack handoff passed on {} APs",started);
+    }
 }
 pub fn yield_current() {
     switch_to_host(ThreadState::Ready, None);
@@ -441,12 +472,28 @@ pub fn join(tid:ThreadId)->Result<(),i64>{
   if enabled{cpu::enable_interrupts()}
  }
 }
-pub fn kill_process_threads(pid:ProcessId){with_sched(|s|{
+pub fn kill_process_threads(pid:ProcessId){
+ let targets=with_sched(|s|{
+ let mut targets=0u64;
  for (i,slot) in s.threads.iter_mut().enumerate(){
-  if !s.cpus.iter().any(|cpu|cpu.current==Some(i)){if let Some(t)=slot.as_mut(){if t.pid==pid{t.state=ThreadState::Exited}}}
+  if let Some(t)=slot.as_mut(){if t.pid==pid{
+   if let Some(logical)=s.cpus.iter().position(|cpu|cpu.current==Some(i)){
+    t.kill_pending=true;targets|=1u64<<logical;
+   }else{t.state=ThreadState::Exited}
+  }}
  }
  s.ready.retain(|i|s.threads[*i].as_ref().is_some_and(|t|t.state==ThreadState::Ready));
-})}
+ targets
+ });
+ for logical in 0..8 {
+  if targets&(1u64<<logical)==0||logical==cpu_index(){continue}
+  if let Some(id)=crate::arch::x86_64::percpu::apic_id(logical).and_then(|id|u8::try_from(id).ok()){
+   if crate::arch::x86_64::apic::send_ipi(id,241).is_err(){
+    crate::nova_log!(Error,"SCHED","stop IPI failed for CPU {}",logical);
+   }
+  }
+ }
+}
 /// No CPU owns a stack from this process and no runnable or blocked thread
 /// can resume inside its address space.
 pub fn process_quiesced(pid:ProcessId)->bool{with_sched(|s|{
@@ -476,7 +523,12 @@ pub fn has_ready()->bool {with_sched(|s|s.ready.iter().any(|&i|s.threads[i].as_r
 /// kernel stack. The IRQ stub preserves volatile GPRs and FPU state; this
 /// context resumes inside the same IRQ handler and eventually executes IRETQ.
 pub fn preempt_if_running() {
-    let should_switch = with_sched(|s| s.cpus[cpu_index()].current.is_some()
-        && s.ready.iter().any(|&i|s.threads[i].as_ref().is_some_and(|t|t.affinity==cpu_index())));
+    let (stop,should_switch) = with_sched(|s| {
+        let Some(i)=s.cpus[cpu_index()].current else{return (false,false)};
+        let stop=s.threads[i].as_ref().is_some_and(|t|t.kill_pending);
+        let switch=crate::interrupts::timer::ticks()%10==0&&s.ready.iter().any(|&i|s.threads[i].as_ref().is_some_and(|t|t.affinity==cpu_index()));
+        (stop,switch)
+    });
+    if stop { exit_current(); }
     if should_switch { yield_current(); }
 }

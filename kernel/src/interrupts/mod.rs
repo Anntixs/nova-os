@@ -9,7 +9,7 @@ extern "C" fn nova_irq_dispatch(vector: u64) {
         32 => {
             timer::on_tick();
             apic::eoi();
-            if timer::ticks() % 10 == 0 { crate::scheduler::preempt_if_running(); }
+            crate::scheduler::preempt_if_running();
         }
         33 => {
             ps2::on_irq();
@@ -21,6 +21,7 @@ extern "C" fn nova_irq_dispatch(vector: u64) {
         }
         241 => {
             apic::eoi();
+            crate::scheduler::preempt_if_running();
         }
         255 => {}
         _ => {

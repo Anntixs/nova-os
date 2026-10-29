@@ -149,6 +149,9 @@ try:
         marker = f"concurrent TLB flush passed on {min(requested_cpus, 8)-1} APs"
         if marker not in content:
             raise AssertionError(f"Missing concurrent TLB flush test: {marker}")
+        marker = f"AP stop IPI and stack handoff passed on {min(requested_cpus, 8)-1} APs"
+        if marker not in content:
+            raise AssertionError(f"Missing AP stop IPI test: {marker}")
     cpu_lines = re.findall(r"(?m)^([AB][123])\r?$", content)
     if (len(cpu_lines) != 6 or set(cpu_lines) != {"A1", "A2", "A3", "B1", "B2", "B3"}
             or not (cpu_lines.index("A1") < cpu_lines.index("A2") < cpu_lines.index("A3"))
