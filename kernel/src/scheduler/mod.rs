@@ -94,6 +94,7 @@ fn finish_switch() {
     let exited = with_sched(|s| {
         let local = &mut s.cpus[cpu_index()];
         let Some(next) = local.pending.take() else { return None };
+        assert_eq!(cpu::read_cr3(),local.host_cr3,"thread published before host CR3 restored");
         let index = local.current.take().expect("switch without current thread");
         debug_assert!(!s.ready.contains(&index), "active stack already queued");
         let thread = s.threads[index].as_mut().expect("switched thread missing");
@@ -253,9 +254,11 @@ pub fn run() {
         unsafe {
             context::switch(old, new);
         }
-        finish_switch();
         let host_cr3 = with_sched(|s| s.cpus[cpu_index()].host_cr3);
+        // Keep the old thread owned by this CPU until its address space is no
+        // longer active. A parent on another CPU may reap it after publication.
         cpu::write_cr3(host_cr3);
+        finish_switch();
         if enabled {
             cpu::enable_interrupts();
         }
@@ -294,9 +297,9 @@ pub fn run_ap() -> ! {
         // SAFETY: the selected boxed thread is pinned and cannot be selected
         // by another CPU while its state is Running. Local IRQs are masked.
         unsafe{context::switch(host,thread)}
-        finish_switch();
         let host_cr3=with_sched(|s|s.cpus[logical].host_cr3);
         cpu::write_cr3(host_cr3);
+        finish_switch();
         cpu::enable_interrupts();
     }
 }
