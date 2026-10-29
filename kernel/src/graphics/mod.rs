@@ -1,9 +1,19 @@
 //! Controlled framebuffer primitive. Only the lease owner may draw. User
 //! memory is copied/translated by syscall code; this module sees RGB values.
-use core::sync::atomic::{AtomicBool,AtomicU64,Ordering};
+use core::sync::atomic::{AtomicBool,AtomicU64,AtomicUsize,Ordering};
 use crate::process::ProcessId;
 static OWNER:AtomicU64=AtomicU64::new(0);
 static DRAW_LOCK:AtomicBool=AtomicBool::new(false);
+static CONSOLE_DRAWING:AtomicUsize=AtomicUsize::new(0);
+pub struct ConsoleGuard;
+impl Drop for ConsoleGuard {fn drop(&mut self){CONSOLE_DRAWING.fetch_sub(1,Ordering::Release);}}
+/// Register a console draw before checking the lease. Acquisition waits for
+/// every previously registered draw to finish before giving a user the screen.
+pub fn begin_console()->Option<ConsoleGuard>{
+ CONSOLE_DRAWING.fetch_add(1,Ordering::AcqRel);
+ if !console_visible(){CONSOLE_DRAWING.fetch_sub(1,Ordering::Release);return None}
+ Some(ConsoleGuard)
+}
 struct DrawGuard;
 impl DrawGuard {
  fn acquire()->Self {
@@ -27,7 +37,8 @@ pub fn acquire(pid:ProcessId)->Result<(),i64>{
  let _guard=DrawGuard::acquire();
  if crate::framebuffer().is_none(){return Err(-19)}
  match OWNER.compare_exchange(0,pid.0,Ordering::AcqRel,Ordering::Acquire){
-  Ok(_)=>Ok(()),Err(old) if old==pid.0=>Ok(()),Err(_)=>Err(-16),
+  Ok(_)=>{while CONSOLE_DRAWING.load(Ordering::Acquire)!=0{core::hint::spin_loop()}Ok(())},
+  Err(old) if old==pid.0=>Ok(()),Err(_)=>Err(-16),
  }
 }
 pub fn release(pid:ProcessId)->Result<(),i64>{
