@@ -10,6 +10,10 @@ nova_irq_1:
 nova_irq_spurious:
     push 255
     jmp nova_irq_common
+.global nova_irq_tlb
+nova_irq_tlb:
+    push 240
+    jmp nova_irq_common
 nova_irq_common:
     cld
     // After the vector push, saved CS is at RSP+16. User IRQs must install

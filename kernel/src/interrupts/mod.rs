@@ -15,6 +15,10 @@ extern "C" fn nova_irq_dispatch(vector: u64) {
             ps2::on_irq();
             apic::eoi();
         }
+        240 => {
+            crate::arch::x86_64::tlb::on_ipi();
+            apic::eoi();
+        }
         255 => {}
         _ => {
             cpu::halt_forever();

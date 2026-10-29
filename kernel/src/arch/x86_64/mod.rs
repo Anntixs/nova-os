@@ -17,3 +17,4 @@ pub fn init() {
 pub mod apic;
 pub mod smp;
 pub mod percpu;
+pub mod tlb;

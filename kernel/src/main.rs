@@ -268,6 +268,11 @@ pub extern "sysv64" fn _start(info: *const NovaBootInfo) -> ! {
     nova_log!(Info,"TTY","terminal input initialized");
     cpu::enable_interrupts();
     arch::x86_64::smp::probe(&topology,info.ap_trampoline);
+    #[cfg(feature = "smptest")]
+    match arch::x86_64::tlb::probe() {
+        Ok(aps) => nova_log!(Info, "TEST", "remote TLB IPI acknowledged on {} APs", aps),
+        Err(error) => panic!("remote TLB IPI probe failed: {}", error),
+    }
     cpu::disable_interrupts();
     fill(f, 0x10131b);
     let white = 0xe5e9f0;
