@@ -69,7 +69,8 @@ pub fn enable_local(){
     lapic_write(0xf0,0x100|0xff);
 }
 /// Send a physical-destination xAPIC IPI and wait for its delivery status.
-/// This is used only by the BSP during sequential AP startup.
+/// Each CPU owns its Local APIC ICR registers. Callers on that CPU serialize
+/// sends and must not invoke this from an interrupt handler that can reenter.
 pub fn send_ipi(apic_id:u8, command:u32)->Result<(),Error>{
     for _ in 0..100_000 {if lapic_read(0x300)&(1<<12)==0 {break}}
     if lapic_read(0x300)&(1<<12)!=0{return Err(Error::BadRouting)}

@@ -30,6 +30,7 @@ unsafe impl Sync for Cell {}
 static SCHED: Cell = Cell(UnsafeCell::new(None),AtomicBool::new(false));
 static KERNEL_ONLINE:AtomicU64=AtomicU64::new(1);
 pub fn kernel_online_cpus()->u32{KERNEL_ONLINE.load(Ordering::Acquire).count_ones()}
+pub fn kernel_online_mask() -> u64 { KERNEL_ONLINE.load(Ordering::Acquire) }
 
 #[cfg(feature = "selftest")]
 static TEST_STEP: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
@@ -314,6 +315,8 @@ static AP_WORK_EXPECTED:AtomicU64=AtomicU64::new(0);
 #[cfg(feature="smptest")]
 static AP_WORK_TOTAL:AtomicU64=AtomicU64::new(0);
 #[cfg(feature="smptest")]
+static AP_WORK_FLUSHED:AtomicU64=AtomicU64::new(0);
+#[cfg(feature="smptest")]
 extern "C" fn ap_worker()->!{
     let logical=cpu_index();
     assert!(logical>0,"AP worker ran on BSP");
@@ -325,6 +328,10 @@ extern "C" fn ap_worker()->!{
         if crate::interrupts::timer::uptime_ms()>=barrier_deadline{exit_current()}
         core::hint::spin_loop();
     }
+    cpu::enable_interrupts();
+    let expected_targets=AP_WORK_EXPECTED.load(Ordering::Acquire).count_ones() as usize;
+    if crate::arch::x86_64::tlb::broadcast()!=Ok(expected_targets){exit_current()}
+    AP_WORK_FLUSHED.fetch_or(1u64<<logical,Ordering::Release);
     for _ in 0..64 {
         assert_eq!(cpu_index(),logical,"AP worker migrated unexpectedly");
         AP_WORK_TOTAL.fetch_add(1,Ordering::AcqRel);
@@ -351,8 +358,10 @@ pub fn ap_selftest(){
     assert!(ap_workers_exited(&tids),"AP kernel worker test timed out");
     assert_eq!(AP_WORK_DONE.load(Ordering::Acquire)&expected,expected);
     assert_eq!(AP_WORK_STARTED.load(Ordering::Acquire)&expected,expected);
+    assert_eq!(AP_WORK_FLUSHED.load(Ordering::Acquire)&expected,expected);
     assert_eq!(AP_WORK_TOTAL.load(Ordering::Acquire),started as u64*64);
     reap_ap_workers(&tids);
+    crate::nova_log!(Info,"TEST","concurrent TLB flush passed on {} APs",started);
     crate::nova_log!(Info,"TEST","AP scheduler kernel workers passed on {} APs",started);
 }
 pub fn yield_current() {

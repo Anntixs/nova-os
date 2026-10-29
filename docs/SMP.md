@@ -16,7 +16,7 @@ Each AP programs its own SYSCALL MSRs during entry. The scheduler's RSP0 setter 
 
 The earlier QEMU startup and userspace regression matrix passed with `-smp 1`, `2`, `4`, and `8`. The kernel-worker scheduler test passed with `-smp 4`. This proves cooperative kernel context switching on three APs, but does not establish user-thread SMP scheduling, process-table concurrency, VFS concurrency, AP timer preemption or hardware support outside QEMU.
 
-Vector 240 now has an IPI handler that reloads the receiving CPU's CR3, then publishes an acknowledgement. In `NOVA_SMPTEST=1`, the BSP sent that IPI to all three APs in QEMU `-smp 4` and observed all three acknowledgements. This validates the interrupt route and local flush operation. It does not yet track which address space each CPU runs or serialize concurrent shootdown requests, so user mapping changes still cannot rely on it for AP scheduling.
+Vector 240 has an IPI handler that reloads the receiving CPU's CR3 and publishes an acknowledgement. Per-target request and acknowledgement generations allow concurrent senders to coalesce requests. In `NOVA_SMPTEST=1`, the BSP first probes every AP; then pinned AP workers simultaneously broadcast a flush and wait for acknowledgements from every other online scheduler CPU. This passed in QEMU `-smp 4`. The protocol currently flushes all online CPUs rather than tracking their address spaces. User page-map paths do not invoke it: they currently hold a process lock with interrupts masked, so waiting for remote acknowledgement there would be unsafe. The protocol is not yet a complete user-address-space shootdown or frame-reclamation barrier.
 
 ## PLANNED before Stage B
 
