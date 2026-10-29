@@ -131,9 +131,12 @@ fn read(fd:u64,addr:u64,count:u64)->i64{
 fn read_tty(addr:u64,count:u64)->i64{
   if count==0{return 0}
   loop {
-   if let Some(bytes)=crate::tty::take(count as usize){return copy_out(addr,&bytes).map_or_else(|e|e,|_|bytes.len() as i64)}
    let Some(pid)=process::current_pid()else{return EBADF};
-   if crate::tty::wait(pid).is_err(){return -16}
+   match crate::tty::take_or_wait(count as usize,pid){
+    Ok(Some(bytes))=>return copy_out(addr,&bytes).map_or_else(|e|e,|_|bytes.len() as i64),
+    Ok(None)=>{},
+    Err(())=>return -16,
+   }
    scheduler::block_current();
   }
 }
@@ -142,13 +145,16 @@ fn read_keyboard(addr:u64,count:u64)->i64{
  let Some(pid)=process::current_pid()else{return EBADF};
  loop {
   if !crate::input::owned_by(pid){return -1}
-  if let Some(event)=crate::input::pop_raw(){
+  match crate::input::pop_raw_or_wait(pid){
+  Ok(Some(event))=>{
    let mut data=[0u8;16];data[0]=if event.pressed{1}else{2};data[1]=event.modifiers;
    data[2..4].copy_from_slice(&event.code.to_le_bytes());data[4]=event.key;
    data[8..16].copy_from_slice(&event.timestamp_ms.to_le_bytes());
    return copy_out(addr,&data).map_or_else(|e|e,|_|16)
+  },
+  Ok(None)=>{},
+  Err(())=>return -16,
   }
-  if crate::input::wait_raw(pid).is_err(){return -16}
   scheduler::block_current();
  }
 }
