@@ -232,6 +232,7 @@ pub extern "sysv64" fn _start(info: *const NovaBootInfo) -> ! {
     nova_log!(Info,"VFS","FAT32 mounted at /");
     device::mount().unwrap_or_else(|e|panic!("/dev mount: {:?}",e));
     fs::procfs::mount().unwrap_or_else(|e|panic!("/proc mount: {:?}",e));
+    fs::vfs::freeze_mounts();
     nova_log!(Info,"VFS","device and process filesystems mounted");
     scheduler::init();
     nova_log!(Info, "SCHED", "cooperative scheduler initialized");

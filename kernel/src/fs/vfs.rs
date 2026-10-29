@@ -1,6 +1,6 @@
 use alloc::{boxed::Box,string::{String,ToString},vec::Vec};
 use super::fat32::{self,Entry,Volume};
-use core::cell::UnsafeCell;
+use core::{cell::UnsafeCell,sync::atomic::{AtomicBool,Ordering}};
 use crate::arch::x86_64::cpu;
 
 #[derive(Clone,Copy,Debug)]pub enum Error {NotMounted,Path,Unsupported,Fs(fat32::Error)}
@@ -8,7 +8,7 @@ impl From<fat32::Error> for Error {fn from(e:fat32::Error)->Self{Self::Fs(e)}}
 #[derive(Clone,Debug)]pub struct Node {pub name:String,pub size:u64,pub directory:bool}
 impl From<Entry> for Node {fn from(e:Entry)->Self{Self{name:e.name,size:e.size as u64,directory:e.directory}}}
 
-pub trait FileSystem {
+pub trait FileSystem: Send + Sync {
  fn lookup(&self,path:&str)->Result<Node,Error>;
  fn readdir(&self,path:&str)->Result<Vec<Node>,Error>;
  fn read(&self,path:&str)->Result<Vec<u8>,Error>;
@@ -16,13 +16,21 @@ pub trait FileSystem {
  fn remove(&self,path:&str)->Result<(),Error>;
  fn write(&self,path:&str,offset:usize,data:&[u8],truncate:bool)->Result<usize,Error>;
 }
-struct Fat32FileSystem(Volume);
+struct Fat32FileSystem {volume:Volume, lock:AtomicBool}
 impl Fat32FileSystem {
+ fn transaction<R>(&self,f:impl FnOnce(&Self)->R)->R {
+  let enabled=cpu::interrupts_enabled();cpu::disable_interrupts();
+  while self.lock.compare_exchange(false,true,Ordering::Acquire,Ordering::Relaxed).is_err(){core::hint::spin_loop()}
+  let result=f(self);
+  self.lock.store(false,Ordering::Release);
+  if enabled{cpu::enable_interrupts()}
+  result
+ }
  fn resolve(&self,path:&str)->Result<Entry,Error>{
-  let mut current=Entry{name:"/".to_string(),cluster:self.0.root,size:0,directory:true};
+  let mut current=Entry{name:"/".to_string(),cluster:self.volume.root,size:0,directory:true};
   for part in path.split('/').filter(|x|!x.is_empty()){
    if !current.directory{return Err(fat32::Error::NotDirectory.into())}
-   current=self.0.entries(current.cluster)?.into_iter().find(|e|e.name.eq_ignore_ascii_case(part)).ok_or(fat32::Error::NotFound)?;
+   current=self.volume.entries(current.cluster)?.into_iter().find(|e|e.name.eq_ignore_ascii_case(part)).ok_or(fat32::Error::NotFound)?;
   }Ok(current)
  }
  fn parent(&self,path:&str)->Result<(u32,String),Error>{
@@ -33,28 +41,32 @@ impl Fat32FileSystem {
  }
 }
 impl FileSystem for Fat32FileSystem {
- fn lookup(&self,path:&str)->Result<Node,Error>{Ok(self.resolve(path)?.into())}
- fn readdir(&self,path:&str)->Result<Vec<Node>,Error>{let e=self.resolve(path)?;if !e.directory{return Err(fat32::Error::NotDirectory.into())}Ok(self.0.entries(e.cluster)?.into_iter().map(Into::into).collect())}
- fn read(&self,path:&str)->Result<Vec<u8>,Error>{let e=self.resolve(path)?;self.0.read_file(&e).map_err(Into::into)}
- fn create(&self,path:&str,directory:bool)->Result<(),Error>{let(p,n)=self.parent(path)?;self.0.create(p,&n,directory).map_err(Into::into)}
- fn remove(&self,path:&str)->Result<(),Error>{let(p,n)=self.parent(path)?;self.0.remove(p,&n).map_err(Into::into)}
- fn write(&self,path:&str,offset:usize,data:&[u8],truncate:bool)->Result<usize,Error>{let(p,n)=self.parent(path)?;self.0.write_file(p,&n,offset,data,truncate).map_err(Into::into)}
+ fn lookup(&self,path:&str)->Result<Node,Error>{self.transaction(|fs|Ok(fs.resolve(path)?.into()))}
+ fn readdir(&self,path:&str)->Result<Vec<Node>,Error>{self.transaction(|fs|{let e=fs.resolve(path)?;if !e.directory{return Err(fat32::Error::NotDirectory.into())}Ok(fs.volume.entries(e.cluster)?.into_iter().map(Into::into).collect())})}
+ fn read(&self,path:&str)->Result<Vec<u8>,Error>{self.transaction(|fs|{let e=fs.resolve(path)?;fs.volume.read_file(&e).map_err(Into::into)})}
+ fn create(&self,path:&str,directory:bool)->Result<(),Error>{self.transaction(|fs|{let(p,n)=fs.parent(path)?;fs.volume.create(p,&n,directory).map_err(Into::into)})}
+ fn remove(&self,path:&str)->Result<(),Error>{self.transaction(|fs|{let(p,n)=fs.parent(path)?;fs.volume.remove(p,&n).map_err(Into::into)})}
+ fn write(&self,path:&str,offset:usize,data:&[u8],truncate:bool)->Result<usize,Error>{self.transaction(|fs|{let(p,n)=fs.parent(path)?;fs.volume.write_file(p,&n,offset,data,truncate).map_err(Into::into)})}
 }
 struct Mounted {point:String, filesystem:Box<dyn FileSystem>}
 struct Mount(UnsafeCell<Option<Vec<Mounted>>>);
-// SAFETY: one bootstrap CPU; mounts are installed before user execution and
-// never replaced or removed while a filesystem reference is borrowed.
+// SAFETY: mounts are installed on the BSP before AP startup, then frozen.
+// The FileSystem trait requires Send + Sync, and boxed filesystem objects
+// remain pinned for the kernel lifetime after mount-table publication.
 unsafe impl Sync for Mount {}
 static ROOT:Mount=Mount(UnsafeCell::new(None));
+static FROZEN:AtomicBool=AtomicBool::new(false);
+pub fn freeze_mounts(){FROZEN.store(true,Ordering::Release)}
 pub fn mount_root()->Result<(),Error>{
  let v=Volume::mount()?;
  crate::nova_log!(Info,"FAT32","{} sectors, {} sectors/cluster",v.sectors,v.sectors_per_cluster);
  let enabled=cpu::interrupts_enabled();cpu::disable_interrupts();
  // SAFETY: one-shot mount before shell/user access. Mounted filesystems stay allocated forever.
- unsafe{*ROOT.0.get()=Some(alloc::vec![Mounted {point:String::from("/"),filesystem:Box::new(Fat32FileSystem(v))}])}
+ unsafe{*ROOT.0.get()=Some(alloc::vec![Mounted {point:String::from("/"),filesystem:Box::new(Fat32FileSystem{volume:v,lock:AtomicBool::new(false)})}])}
  if enabled{cpu::enable_interrupts()};Ok(())
 }
 pub fn mount(point:&str,filesystem:Box<dyn FileSystem>)->Result<(),Error>{
+ if FROZEN.load(Ordering::Acquire){return Err(Error::Unsupported)}
  let path=normalize("/",point)?;
  if path=="/"{return Err(Error::Path)}
  let enabled=cpu::interrupts_enabled();cpu::disable_interrupts();
@@ -67,7 +79,7 @@ pub fn mount(point:&str,filesystem:Box<dyn FileSystem>)->Result<(),Error>{
  if enabled{cpu::enable_interrupts()}result
 }
 fn filesystem(path:&str)->Result<(&'static dyn FileSystem,&str),Error>{
- // SAFETY: the mount vector is frozen before userspace starts. A Box may move
+ // SAFETY: the mount vector is frozen before AP startup. A Box may move
  // within the vector but its heap allocation and vtable remain stable.
  let mounts=unsafe{(*ROOT.0.get()).as_ref().ok_or(Error::NotMounted)?};
  let selected=mounts.iter().filter(|m|m.point=="/"||path==m.point||path.starts_with(&alloc::format!("{}/",m.point))).max_by_key(|m|m.point.len()).ok_or(Error::NotMounted)?;

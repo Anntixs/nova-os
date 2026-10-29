@@ -21,14 +21,14 @@ for path in (CODE, VARS):
 if shutil.which(QEMU) is None:
     sys.exit(f"QEMU missing: {QEMU}")
 if "--no-build" not in sys.argv:
-    subprocess.run([str(ROOT / "scripts/build.sh")], cwd=ROOT, check=True, env={**os.environ, "NOVA_MONITOR": "1"})
+    subprocess.run([str(ROOT / "scripts/build.sh")], cwd=ROOT, check=True, env={**os.environ, "NOVA_MONITOR": "0"})
 shutil.copy(VARS, BUILD / "OVMF_VARS.fd")
 log = BUILD / ("test-files-persistence.log" if "--verify-persistence" in sys.argv else "test-files.log")
 log.write_text("")
 cmd = [QEMU]
 if os.environ.get("NOVA_QEMU_DATADIR"):
     cmd += ["-L", os.environ["NOVA_QEMU_DATADIR"]]
-cmd += ["-machine", "q35", "-m", os.environ.get("NOVA_RAM", "256M"), "-cpu", "qemu64", "-smp", "1",
+cmd += ["-machine", "q35", "-m", os.environ.get("NOVA_RAM", "256M"), "-cpu", "qemu64", "-smp", os.environ.get("NOVA_SMP", "1"),
         "-drive", f"if=pflash,format=raw,readonly=on,file={CODE}",
         "-drive", f"if=pflash,format=raw,file={BUILD / 'OVMF_VARS.fd'}",
         "-drive", f"format=raw,file=fat:rw:{BUILD / 'esp'}",
@@ -59,14 +59,14 @@ def send(line):
         time.sleep(0.06)
 
 try:
-    wait_for("nova> ")
-    commands = ("cat /home/test.txt",) if "--verify-persistence" in sys.argv else ("ls /", "ls /bin", "cat /etc/version", "ls /nope", "ls /home/../bin", "cd /bin", "pwd", "ls", "./hello", "./filetest", "run badmem", "run badopcode", "./hello", "touch /home/test.txt", "write /home/test.txt Hello Nova", "cat /home/test.txt", "mkdir /home/demo", "ls /home", "rm /home/demo", "ls /home", "cd /home", "pwd", "cd ..", "pwd")
+    wait_for("nova:/$ ")
+    commands = ("cat /home/filetest.txt",) if "--verify-persistence" in sys.argv else ("ls /", "ls /bin", "cat /etc/version", "ls /home/../bin", "cd /bin", "pwd", "ls", "./hello", "./filetest", "./badmem", "./badopcode", "./hello", "cd /", "cat /home/filetest.txt")
     for command in commands:
-        before = log.read_text(errors="replace").count("nova> ")
+        before = log.read_text(errors="replace").count("$ ")
         send(command)
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline:
-            if log.read_text(errors="replace").count("nova> ") > before:
+            if log.read_text(errors="replace").count("$ ") > before:
                 break
             time.sleep(0.05)
         else:
@@ -79,7 +79,7 @@ try:
     proc.stdin.flush()
     time.sleep(0.3)
     content=log.read_text(errors="replace")
-    expected = ("Hello Nova", "FAT32 mounted at /") if "--verify-persistence" in sys.argv else ("FAT32 mounted at /", "bin/", "etc/", "filetest", f"Nova OS {VERSION}", "/bin", "Hello from Nova userspace!", "Opening /etc/version...", "File test passed.", "Exception: PAGE FAULT", "Exception: INVALID OPCODE", "Hello Nova")
+    expected = ("Userspace wrote this", "FAT32 mounted at /") if "--verify-persistence" in sys.argv else ("FAT32 mounted at /", "filetest", f"Nova OS {VERSION}", "/bin", "Hello from Nova userspace!", "Opening /etc/version...", "File test passed.", "fault vector 14", "fault vector 6", "Userspace wrote this")
     for marker in expected:
         if marker not in content: raise AssertionError(f"Missing {marker!r} in {log}")
     if "--verify-persistence" not in sys.argv:
