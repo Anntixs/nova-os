@@ -69,23 +69,18 @@ fn range(addr:u64,len:u64,write:bool)->Result<(),i64>{
  Ok(())
 }
 fn copy_in(addr:u64,len:usize)->Result<Vec<u8>,i64>{
- range(addr,len as u64,false)?;let mut data=Vec::with_capacity(len);
- for i in 0..len {let phys=process::translate_user(addr+i as u64,false).ok_or(EFAULT)?;
-  // SAFETY: all pages were validated as user readable and are identity mapped on this CPU.
-  data.push(unsafe{(phys as *const u8).read()});}
+ let mut data=alloc::vec![0u8;len];
+ process::copy_from_user(addr,&mut data).map_err(|_|EFAULT)?;
  Ok(data)
 }
 fn copy_out(addr:u64,data:&[u8])->Result<(),i64>{
- range(addr,data.len() as u64,true)?;
- for (i,byte) in data.iter().enumerate(){let phys=process::translate_user(addr+i as u64,true).ok_or(EFAULT)?;
-  // SAFETY: all pages were validated as user writable and are identity mapped on this CPU.
-  unsafe{(phys as *mut u8).write(*byte)};}
- Ok(())
+ process::copy_to_user(addr,data).map_err(|_|EFAULT)
 }
 fn path(addr:u64)->Result<String,i64>{
- let mut bytes=Vec::new();for i in 0..256u64{let phys=process::translate_user(addr.checked_add(i).ok_or(EFAULT)?,false).ok_or(EFAULT)?;
-  // SAFETY: the byte address was checked through the active user page tables.
-  let byte=unsafe{(phys as *const u8).read()};if byte==0{return String::from_utf8(bytes).map_err(|_|EINVAL)}bytes.push(byte);
+ let mut bytes=Vec::new();for i in 0..256u64{
+  let mut byte=[0u8;1];
+  process::copy_from_user(addr.checked_add(i).ok_or(EFAULT)?,&mut byte).map_err(|_|EFAULT)?;
+  if byte[0]==0{return String::from_utf8(bytes).map_err(|_|EINVAL)}bytes.push(byte[0]);
  }Err(EINVAL)
 }
 fn open(addr:u64,flags:u64)->i64{
@@ -249,12 +244,9 @@ fn fb_blit(addr:u64)->i64{
  if let Err(e)=range(pointer,total,false){return e}
  let Some(pid)=process::current_pid()else{return -1};
  crate::graphics::blit(pid,rect,stride,|offset|{
-  let mut bytes=[0u8;4];for (i,byte) in bytes.iter_mut().enumerate(){
-   let phys=process::translate_user(pointer+offset+i as u64,false).ok_or(EFAULT)?;
-   // SAFETY: full user buffer was validated, and physical RAM is identity
-   // mapped on the BSP. Byte reads cannot cross a physical page boundary.
-   *byte=unsafe{(phys as *const u8).read()};
-  }Ok(u32::from_le_bytes(bytes))
+  let mut bytes=[0u8;4];
+  process::copy_from_user(pointer+offset,&mut bytes).map_err(|_|EFAULT)?;
+  Ok(u32::from_le_bytes(bytes))
  }).map_or_else(|e|e,|_|0)
 }
 fn stat(fd:u64,addr:u64)->i64{

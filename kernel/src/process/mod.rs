@@ -237,6 +237,12 @@ pub fn translate_user(addr: u64, write: bool) -> Option<u64> {
             .translate_user(addr, write)
     })
 }
+pub fn copy_from_user(addr:u64,dst:&mut [u8])->Result<(),()>{
+ with_manager(|m|m.active().ok_or(())?.address_space.as_ref().ok_or(())?.copy_from_user(addr,dst))
+}
+pub fn copy_to_user(addr:u64,src:&[u8])->Result<(),()>{
+ with_manager(|m|m.active().ok_or(())?.address_space.as_ref().ok_or(())?.copy_to_user(addr,src))
+}
 pub fn exit(code: i32) {
     if let Some(pid)=current_pid(){crate::graphics::release_if_owner(pid);crate::input::release_if_owner(pid)}
     let (parent, files, adopted)=with_manager(|m| {

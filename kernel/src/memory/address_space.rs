@@ -3,6 +3,7 @@ use super::{
     physical, Page, PhysAddr, PhysFrame, VirtAddr,
 };
 use crate::arch::x86_64::cpu;
+use core::sync::atomic::{AtomicBool, Ordering};
 use nova_core::NovaBootInfo;
 
 const PRESENT: u64 = 1;
@@ -15,8 +16,27 @@ const SLOT: usize = (USER_BASE >> 39) as usize;
 
 pub struct AddressSpace {
     pub root: PhysFrame,
+    page_table_lock: AtomicBool,
+}
+struct PageTableGuard<'a> {
+    lock: &'a AtomicBool,
+    restore_interrupts: bool,
+}
+impl Drop for PageTableGuard<'_> {
+    fn drop(&mut self) {
+        self.lock.store(false, Ordering::Release);
+        if self.restore_interrupts { cpu::enable_interrupts(); }
+    }
 }
 impl AddressSpace {
+    fn lock_page_tables(&self) -> PageTableGuard<'_> {
+        let restore_interrupts = cpu::interrupts_enabled();
+        cpu::disable_interrupts();
+        while self.page_table_lock.compare_exchange(false,true,Ordering::Acquire,Ordering::Relaxed).is_err() {
+            core::hint::spin_loop();
+        }
+        PageTableGuard { lock: &self.page_table_lock, restore_interrupts }
+    }
     pub fn new() -> Result<Self, &'static str> {
         // Child creation can occur during a syscall while a parent's PML4 is active.
         // Clone the permanent supervisor root, whose user slot is empty.
@@ -35,7 +55,7 @@ impl AddressSpace {
                 p.write(p.read() & !USER);
             }
         }
-        Ok(Self { root })
+        Ok(Self { root, page_table_lock: AtomicBool::new(false) })
     }
     pub fn activate(&self) {
         cpu::write_cr3(self.root.address());
@@ -45,22 +65,17 @@ impl AddressSpace {
             return Err("invalid user page");
         }
         let frame = physical::allocate_frame().map_err(|_| "no user frame")?;
+        // SAFETY: this fresh frame is owned by the new mapping and is identity
+        // mapped. Zero it before publishing the PTE to any other CPU.
+        unsafe { core::ptr::write_bytes(frame.address() as *mut u8, 0, 4096); }
+        let _guard = self.lock_page_tables();
         let old = cpu::read_cr3();
-        let iflag = cpu::interrupts_enabled();
-        cpu::disable_interrupts();
         self.activate();
         let result = paging::map_page(Page(VirtAddr(va)), frame, flags);
         cpu::write_cr3(old);
-        if iflag {
-            cpu::enable_interrupts();
-        }
         if result.is_err() {
             physical::free_allocated_frame(frame).map_err(|_| "user frame rollback failed")?;
             return Err("user mapping failed");
-        }
-        // SAFETY: frame is freshly allocated, identity mapped and owned by this address space.
-        unsafe {
-            core::ptr::write_bytes(frame.address() as *mut u8, 0, 4096);
         }
         Ok(frame)
     }
@@ -68,6 +83,12 @@ impl AddressSpace {
         if !(USER_BASE..USER_END).contains(&va) {
             return None;
         }
+        let _guard = self.lock_page_tables();
+        self.translate_user_locked(va,write)
+    }
+    /// Caller holds the page-table lock, so PTEs and backing frames cannot
+    /// disappear during the walk.
+    fn translate_user_locked(&self, va:u64, write:bool)->Option<u64>{
         let idx = [
             ((va >> 39) & 511) as usize,
             ((va >> 30) & 511) as usize,
@@ -91,6 +112,57 @@ impl AddressSpace {
         }
         None
     }
+    fn valid_copy_range(addr:u64,len:usize)->Option<u64>{
+        if len==0{return Some(addr)}
+        let end=addr.checked_add(len as u64)?;
+        (addr>=USER_BASE&&end<=USER_END).then_some(end)
+    }
+    fn check_copy_pages(&self,addr:u64,end:u64,write:bool)->Result<(),()>{
+        let mut page=addr&!4095;
+        while page<end {
+            self.translate_user_locked(page,write).ok_or(())?;
+            page=page.checked_add(4096).ok_or(())?;
+        }
+        Ok(())
+    }
+    /// Copy from mapped Ring 3 pages while their PTEs and frames are pinned
+    /// by this address space's lock. The caller must keep `self` alive.
+    pub fn copy_from_user(&self,addr:u64,dst:&mut [u8])->Result<(),()>{
+        let end=Self::valid_copy_range(addr,dst.len()).ok_or(())?;
+        if dst.is_empty(){return Ok(())}
+        let _guard=self.lock_page_tables();
+        self.check_copy_pages(addr,end,false)?;
+        let mut done=0;
+        while done<dst.len(){
+            let va=addr+done as u64;
+            let count=(4096-(va as usize&4095)).min(dst.len()-done);
+            let phys=self.translate_user_locked(va,false).ok_or(())?;
+            // SAFETY: the page-table lock pins the validated conventional RAM
+            // frame; Nova identity maps it. The destination slice is disjoint
+            // kernel memory, and `count` stops at the physical page boundary.
+            unsafe{core::ptr::copy_nonoverlapping(phys as *const u8,dst.as_mut_ptr().add(done),count)}
+            done+=count;
+        }
+        Ok(())
+    }
+    /// Copy to writable Ring 3 pages while their PTEs and frames remain pinned.
+    pub fn copy_to_user(&self,addr:u64,src:&[u8])->Result<(),()>{
+        let end=Self::valid_copy_range(addr,src.len()).ok_or(())?;
+        if src.is_empty(){return Ok(())}
+        let _guard=self.lock_page_tables();
+        self.check_copy_pages(addr,end,true)?;
+        let mut done=0;
+        while done<src.len(){
+            let va=addr+done as u64;
+            let count=(4096-(va as usize&4095)).min(src.len()-done);
+            let phys=self.translate_user_locked(va,true).ok_or(())?;
+            // SAFETY: the page-table lock pins this validated writable frame.
+            // Nova identity maps it, and `count` stays within its page.
+            unsafe{core::ptr::copy_nonoverlapping(src.as_ptr().add(done),phys as *mut u8,count)}
+            done+=count;
+        }
+        Ok(())
+    }
     /// Roll back a page that was mapped while constructing an unpublished
     /// region. Never use this for a page visible to another running thread.
     pub fn rollback_unpublished_user(&self,va:u64)->Result<(),&'static str>{
@@ -101,9 +173,10 @@ impl AddressSpace {
     /// must invalidate remote TLBs before freeing the returned frame.
     pub fn detach_user(&self,va:u64)->Result<PhysFrame,&'static str>{
         if va<USER_BASE||va>=USER_END||va&4095!=0{return Err("invalid user unmap")}
-        let old=cpu::read_cr3();let enabled=cpu::interrupts_enabled();cpu::disable_interrupts();
+        let _guard=self.lock_page_tables();
+        let old=cpu::read_cr3();
         self.activate();let result=paging::unmap_page(Page(VirtAddr(va)));
-        cpu::write_cr3(old);if enabled{cpu::enable_interrupts()}
+        cpu::write_cr3(old);
         result.map_err(|_|"user page not mapped")
     }
     pub fn destroy(self, info: &NovaBootInfo) -> Result<(), &'static str> {
