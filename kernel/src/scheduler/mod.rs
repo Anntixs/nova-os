@@ -317,6 +317,8 @@ static AP_WORK_TOTAL:AtomicU64=AtomicU64::new(0);
 #[cfg(feature="smptest")]
 static AP_WORK_FLUSHED:AtomicU64=AtomicU64::new(0);
 #[cfg(feature="smptest")]
+static AP_WORK_FLUSH_COUNT:AtomicU64=AtomicU64::new(0);
+#[cfg(feature="smptest")]
 extern "C" fn ap_worker()->!{
     let logical=cpu_index();
     assert!(logical>0,"AP worker ran on BSP");
@@ -330,7 +332,11 @@ extern "C" fn ap_worker()->!{
     }
     cpu::enable_interrupts();
     let expected_targets=AP_WORK_EXPECTED.load(Ordering::Acquire).count_ones() as usize;
-    if crate::arch::x86_64::tlb::broadcast()!=Ok(expected_targets){exit_current()}
+    for _ in 0..16 {
+        if crate::arch::x86_64::tlb::broadcast()!=Ok(expected_targets){exit_current()}
+        AP_WORK_FLUSH_COUNT.fetch_add(1,Ordering::AcqRel);
+        yield_current();
+    }
     AP_WORK_FLUSHED.fetch_or(1u64<<logical,Ordering::Release);
     for _ in 0..64 {
         assert_eq!(cpu_index(),logical,"AP worker migrated unexpectedly");
@@ -359,9 +365,10 @@ pub fn ap_selftest(){
     assert_eq!(AP_WORK_DONE.load(Ordering::Acquire)&expected,expected);
     assert_eq!(AP_WORK_STARTED.load(Ordering::Acquire)&expected,expected);
     assert_eq!(AP_WORK_FLUSHED.load(Ordering::Acquire)&expected,expected);
+    assert_eq!(AP_WORK_FLUSH_COUNT.load(Ordering::Acquire),started as u64*16);
     assert_eq!(AP_WORK_TOTAL.load(Ordering::Acquire),started as u64*64);
     reap_ap_workers(&tids);
-    crate::nova_log!(Info,"TEST","concurrent TLB flush passed on {} APs",started);
+    crate::nova_log!(Info,"TEST","concurrent TLB flush passed on {} APs (16 rounds each)",started);
     crate::nova_log!(Info,"TEST","AP scheduler kernel workers passed on {} APs",started);
 }
 pub fn yield_current() {
