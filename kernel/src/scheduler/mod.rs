@@ -4,7 +4,7 @@ use crate::{
     thread::{context::Context, Thread, ThreadId, ThreadState},
 };
 use alloc::{boxed::Box, collections::VecDeque, vec::Vec};
-use core::{cell::UnsafeCell,sync::atomic::{AtomicBool,Ordering}};
+use core::{cell::UnsafeCell,sync::atomic::{AtomicBool,AtomicU64,Ordering}};
 
 struct Scheduler {
     cpus: [CpuRun; 8],
@@ -24,10 +24,12 @@ impl CpuRun {
 fn cpu_index() -> usize { crate::arch::x86_64::percpu::current_logical() }
 struct Cell(UnsafeCell<Option<Scheduler>>,AtomicBool);
 // SAFETY: the atomic lock and local IRQ masking serialize all scheduler state.
-// Each CPU has its own host/current slot. AP scheduling is still disabled:
-// process ownership and the context-switch handoff are not SMP-safe yet.
+// Each CPU has its own host/current slot. Only diagnostic PID 0 kernel
+// workers may run on APs; user threads remain pinned to the BSP.
 unsafe impl Sync for Cell {}
 static SCHED: Cell = Cell(UnsafeCell::new(None),AtomicBool::new(false));
+static KERNEL_ONLINE:AtomicU64=AtomicU64::new(1);
+pub fn kernel_online_cpus()->u32{KERNEL_ONLINE.load(Ordering::Acquire).count_ones()}
 
 #[cfg(feature = "selftest")]
 static TEST_STEP: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
@@ -164,6 +166,18 @@ pub fn spawn(pid: ProcessId, entry: extern "C" fn() -> !) -> ThreadId {
     crate::process::add_thread(pid, tid);
     tid
 }
+/// Pin a diagnostic kernel worker to one AP. User processes cannot use this
+/// path until address-space shootdown and process lifetime are SMP-safe.
+#[cfg(feature = "smptest")]
+pub fn spawn_ap_worker(logical:usize,entry:extern "C" fn()->!)->ThreadId{
+    assert!((1..8).contains(&logical));
+    with_sched(|s|{
+        let tid=ThreadId(s.next_tid);s.next_tid+=1;
+        let mut thread=Box::new(Thread::new(tid,ProcessId(0),entry));
+        thread.affinity=logical;thread.state=ThreadState::Ready;
+        s.threads.push(Some(thread));s.ready.push_back(s.threads.len()-1);tid
+    })
+}
 pub fn spawn_user(pid:ProcessId,entry:u64,stack:u64)->ThreadId {
     let tid=with_sched(|s|{
         let tid=ThreadId(s.next_tid);s.next_tid+=1;
@@ -204,7 +218,8 @@ pub fn run() {
         let enabled = cpu::interrupts_enabled();
         cpu::disable_interrupts();
         let pair = with_sched(|s| {
-            let i = s.ready.pop_front()?;
+            let position=s.ready.iter().position(|&i|s.threads[i].as_ref().is_some_and(|t|t.affinity==cpu_index()))?;
+            let i = s.ready.remove(position).expect("ready queue position vanished");
             s.cpus[cpu_index()].current = Some(i);
             let thread=s.threads[i].as_mut().expect("ready thread missing");
             thread.state = ThreadState::Running;
@@ -220,7 +235,7 @@ pub fn run() {
             crate::input::service_raw();
             crate::process::wake_sleepers(crate::interrupts::timer::uptime_ms());
             if has_ready(){continue}
-            let blocked=with_sched(|s|s.threads.iter().any(|t|t.as_ref().is_some_and(|t|t.state==ThreadState::Blocked)));
+            let blocked=with_sched(|s|s.threads.iter().any(|t|t.as_ref().is_some_and(|t|t.affinity==cpu_index()&&t.state==ThreadState::Blocked)));
             if !blocked {break}
             if !has_ready(){cpu::enable_interrupts();cpu::halt();}
             continue;
@@ -243,6 +258,102 @@ pub fn run() {
     with_sched(|s| {
         for slot in &mut s.threads {if slot.as_ref().is_some_and(|t|t.pid.0==0 && t.state==ThreadState::Exited){*slot=None}}
     });
+}
+/// AP host loop for diagnostic PID 0 workers only. Every user thread and
+/// ordinary kernel thread remains pinned to CPU 0 by Thread::new.
+pub fn run_ap() -> ! {
+    let logical=cpu_index();
+    assert!(logical>0 && logical<8);
+    with_sched(|s|s.cpus[logical].host_cr3=cpu::read_cr3());
+    KERNEL_ONLINE.fetch_or(1u64<<logical,Ordering::Release);
+    loop {
+        cpu::disable_interrupts();
+        let pair=with_sched(|s|{
+            let position=s.ready.iter().position(|&i|s.threads[i].as_ref().is_some_and(|t|t.affinity==logical))?;
+            let i=s.ready.remove(position).expect("AP ready queue position vanished");
+            s.cpus[logical].current=Some(i);
+            let thread=s.threads[i].as_mut().expect("AP ready thread missing");
+            assert_eq!(thread.pid,ProcessId(0),"user thread assigned to AP");
+            thread.state=ThreadState::Running;
+            let top=thread.kernel_stack_top();
+            crate::arch::x86_64::gdt::set_rsp0(top);
+            crate::arch::x86_64::syscall::set_stack(top);
+            Some((&raw mut s.cpus[logical].host,&raw const thread.context))
+        });
+        let Some((host,thread))=pair else {
+            // SAFETY: STI followed immediately by HLT avoids losing a wakeup
+            // IPI between enabling interrupts and entering the idle state.
+            unsafe{core::arch::asm!("sti; hlt",options(nomem,nostack));}
+            continue
+        };
+        // SAFETY: the selected boxed thread is pinned and cannot be selected
+        // by another CPU while its state is Running. Local IRQs are masked.
+        unsafe{context::switch(host,thread)}
+        finish_switch();
+        let host_cr3=with_sched(|s|s.cpus[logical].host_cr3);
+        cpu::write_cr3(host_cr3);
+        cpu::enable_interrupts();
+    }
+}
+#[cfg(feature="smptest")]
+pub fn ap_workers_exited(tids:&[ThreadId])->bool{with_sched(|s|{
+    tids.iter().all(|tid|s.threads.iter().flatten().any(|t|t.tid==*tid&&t.state==ThreadState::Exited))
+})}
+#[cfg(feature="smptest")]
+pub fn reap_ap_workers(tids:&[ThreadId]){with_sched(|s|{
+    for slot in &mut s.threads{
+        if slot.as_ref().is_some_and(|t|tids.contains(&t.tid)&&t.state==ThreadState::Exited){*slot=None}
+    }
+})}
+#[cfg(feature="smptest")]
+static AP_WORK_DONE:core::sync::atomic::AtomicU64=core::sync::atomic::AtomicU64::new(0);
+#[cfg(feature="smptest")]
+static AP_WORK_STARTED:AtomicU64=AtomicU64::new(0);
+#[cfg(feature="smptest")]
+static AP_WORK_EXPECTED:AtomicU64=AtomicU64::new(0);
+#[cfg(feature="smptest")]
+static AP_WORK_TOTAL:AtomicU64=AtomicU64::new(0);
+#[cfg(feature="smptest")]
+extern "C" fn ap_worker()->!{
+    let logical=cpu_index();
+    assert!(logical>0,"AP worker ran on BSP");
+    AP_WORK_STARTED.fetch_or(1u64<<logical,Ordering::Release);
+    let barrier_deadline=crate::interrupts::timer::uptime_ms().saturating_add(2000);
+    while AP_WORK_STARTED.load(Ordering::Acquire)&AP_WORK_EXPECTED.load(Ordering::Acquire)
+        !=AP_WORK_EXPECTED.load(Ordering::Acquire)
+    {
+        if crate::interrupts::timer::uptime_ms()>=barrier_deadline{exit_current()}
+        core::hint::spin_loop();
+    }
+    for _ in 0..64 {
+        assert_eq!(cpu_index(),logical,"AP worker migrated unexpectedly");
+        AP_WORK_TOTAL.fetch_add(1,Ordering::AcqRel);
+        yield_current();
+    }
+    AP_WORK_DONE.fetch_or(1u64<<logical,Ordering::Release);
+    exit_current()
+}
+#[cfg(feature="smptest")]
+pub fn ap_selftest(){
+    let mut tids=Vec::new();
+    let mut expected=0u64;
+    for logical in 1..8 {
+        if matches!(crate::arch::x86_64::percpu::state(logical),Some(crate::arch::x86_64::percpu::State::Idle)) {
+            tids.push(spawn_ap_worker(logical,ap_worker));
+            expected|=1u64<<logical;
+        }
+    }
+    AP_WORK_EXPECTED.store(expected,Ordering::Release);
+    let started=crate::arch::x86_64::smp::start_scheduler().expect("AP scheduler start failed");
+    assert_eq!(started,expected.count_ones() as usize);
+    let deadline=crate::interrupts::timer::uptime_ms().saturating_add(3000);
+    while !ap_workers_exited(&tids) && crate::interrupts::timer::uptime_ms()<deadline {cpu::halt()}
+    assert!(ap_workers_exited(&tids),"AP kernel worker test timed out");
+    assert_eq!(AP_WORK_DONE.load(Ordering::Acquire)&expected,expected);
+    assert_eq!(AP_WORK_STARTED.load(Ordering::Acquire)&expected,expected);
+    assert_eq!(AP_WORK_TOTAL.load(Ordering::Acquire),started as u64*64);
+    reap_ap_workers(&tids);
+    crate::nova_log!(Info,"TEST","AP scheduler kernel workers passed on {} APs",started);
 }
 pub fn yield_current() {
     switch_to_host(ThreadState::Ready, None);
@@ -332,11 +443,12 @@ pub fn wake(pid:ProcessId) {
 pub fn reap(pid:ProcessId) {
  with_sched(|s|{for slot in &mut s.threads{if slot.as_ref().is_some_and(|t|t.pid==pid&&t.state==ThreadState::Exited){*slot=None}}});
 }
-pub fn has_ready()->bool {with_sched(|s|!s.ready.is_empty())}
+pub fn has_ready()->bool {with_sched(|s|s.ready.iter().any(|&i|s.threads[i].as_ref().is_some_and(|t|t.affinity==cpu_index())))}
 /// Called only after the timer's EOI, on the interrupted thread's trusted
 /// kernel stack. The IRQ stub preserves volatile GPRs and FPU state; this
 /// context resumes inside the same IRQ handler and eventually executes IRETQ.
 pub fn preempt_if_running() {
-    let should_switch = with_sched(|s| s.cpus[cpu_index()].current.is_some() && !s.ready.is_empty());
+    let should_switch = with_sched(|s| s.cpus[cpu_index()].current.is_some()
+        && s.ready.iter().any(|&i|s.threads[i].as_ref().is_some_and(|t|t.affinity==cpu_index())));
     if should_switch { yield_current(); }
 }

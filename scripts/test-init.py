@@ -128,6 +128,8 @@ try:
     requested_cpus = int(os.environ.get("NOVA_SMP", "1"))
     if f"DiscoveredCPUs: {requested_cpus}" not in content:
         raise AssertionError("MADT processor count missing from cpuinfo")
+    if f"SchedulerCPUs: {min(requested_cpus, 8)}" not in content or "UserSchedulerCPUs: 1" not in content:
+        raise AssertionError("Kernel/user scheduler CPU counts missing from cpuinfo")
     if requested_cpus > 1:
         for apic_id in range(1, min(requested_cpus, 8)):
             marker = f"APIC {apic_id} entered Nova long-mode code"
@@ -140,6 +142,9 @@ try:
         marker = f"remote TLB IPI acknowledged on {min(requested_cpus, 8)-1} APs"
         if marker not in content:
             raise AssertionError(f"Missing remote TLB IPI acknowledgement: {marker}")
+        marker = f"AP scheduler kernel workers passed on {min(requested_cpus, 8)-1} APs"
+        if marker not in content:
+            raise AssertionError(f"Missing AP scheduler worker test: {marker}")
     cpu_lines = re.findall(r"(?m)^([AB][123])\r?$", content)
     if (len(cpu_lines) != 6 or set(cpu_lines) != {"A1", "A2", "A3", "B1", "B2", "B3"}
             or not (cpu_lines.index("A1") < cpu_lines.index("A2") < cpu_lines.index("A3"))

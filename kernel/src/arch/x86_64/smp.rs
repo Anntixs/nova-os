@@ -1,8 +1,6 @@
 //! Sequential AP bring-up probe. APs enter long-mode Nova code, load private
-//! GDT/TSS/IST state, acknowledge, then idle. They are not scheduler-online yet.
-use core::{arch::{asm,global_asm},ptr,sync::atomic::{AtomicU64,Ordering}};
-#[cfg(feature="smptest")]
-use core::sync::atomic::AtomicBool;
+//! GDT/TSS/IST state, acknowledge, then enter a kernel-only scheduler host loop.
+use core::{arch::{asm,global_asm},ptr,sync::atomic::{AtomicBool,AtomicU64,Ordering}};
 use crate::{platform::acpi::Topology,interrupts::timer};
 use super::{apic,cpu,gdt,idt,percpu};
 
@@ -20,6 +18,7 @@ unsafe extern "C" {
 struct ApStack([u8;16384]);
 static mut AP_STACKS:[ApStack;8]=[ApStack([0;16384]);8];
 static REACHED:AtomicU64=AtomicU64::new(0);
+static SCHED_START:AtomicBool=AtomicBool::new(false);
 #[cfg(feature="smptest")]
 static STRESS_DONE:AtomicU64=AtomicU64::new(0);
 #[cfg(feature="smptest")]
@@ -86,10 +85,32 @@ extern "sysv64" fn ap_enter(logical:u64)->!{
         ap_allocator_stress(logical as usize);
     }
     loop {
-        // SAFETY: this AP has its own GDT/TSS/IST and an immutable IDT; only
-        // spurious interrupts can arrive before it joins the scheduler.
+        if SCHED_START.load(Ordering::Acquire){
+            percpu::set_state(logical as usize,percpu::State::Running);
+            crate::scheduler::run_ap();
+        }
+        // SAFETY: this AP has its own GDT/TSS/IST and an immutable IDT. STI
+        // immediately followed by HLT avoids losing the scheduler-start IPI.
         unsafe{asm!("sti; hlt",options(nomem,nostack));}
     }
+}
+/// Admit APs to the kernel-only host loop. User and ordinary kernel threads
+/// remain pinned to the BSP until the wider SMP audit is complete.
+pub fn start_scheduler()->Result<usize,&'static str>{
+    if !cpu::interrupts_enabled(){return Err("AP scheduler start requires BSP interrupts")}
+    SCHED_START.store(true,Ordering::Release);
+    let mut started=0;
+    for logical in 1..8 {
+        if !matches!(percpu::state(logical),Some(percpu::State::Idle|percpu::State::Running)){continue}
+        let id=percpu::apic_id(logical).ok_or("APIC ID missing")?;
+        let id=u8::try_from(id).map_err(|_|"xAPIC ID out of range")?;
+        apic::send_ipi(id,241).map_err(|_|"AP scheduler wake IPI failed")?;
+        started+=1;
+    }
+    let deadline=timer::uptime_ms().saturating_add(1000);
+    while crate::scheduler::kernel_online_cpus()<started as u32+1 && timer::uptime_ms()<deadline{cpu::halt()}
+    if crate::scheduler::kernel_online_cpus()<started as u32+1{return Err("AP scheduler online acknowledgement timed out")}
+    Ok(started)
 }
 fn wait_ms(milliseconds:u64){
     let deadline=timer::uptime_ms().saturating_add(milliseconds);
@@ -165,7 +186,7 @@ pub fn probe(topology:&Topology,page:u64){
         if wait_reached(logical,100){
             #[cfg(feature="smptest")]
             {acknowledged|=1u64<<logical;}
-            crate::nova_log!(Info,"SMP","APIC {} entered Nova long-mode code; scheduler still BSP-only",processor.apic_id);
+            crate::nova_log!(Info,"SMP","APIC {} entered Nova long-mode code; user scheduling remains BSP-only",processor.apic_id);
         }else{
             percpu::set_state(logical,percpu::State::Failed);
             crate::nova_log!(Warn,"SMP","APIC {} failed to acknowledge startup",processor.apic_id);

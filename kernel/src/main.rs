@@ -273,6 +273,10 @@ pub extern "sysv64" fn _start(info: *const NovaBootInfo) -> ! {
         Ok(aps) => nova_log!(Info, "TEST", "remote TLB IPI acknowledged on {} APs", aps),
         Err(error) => panic!("remote TLB IPI probe failed: {}", error),
     }
+    #[cfg(feature = "smptest")]
+    scheduler::ap_selftest();
+    #[cfg(not(feature = "smptest"))]
+    arch::x86_64::smp::start_scheduler().unwrap_or_else(|e| panic!("AP scheduler start: {}",e));
     cpu::disable_interrupts();
     fill(f, 0x10131b);
     let white = 0xe5e9f0;

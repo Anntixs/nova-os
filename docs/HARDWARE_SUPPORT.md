@@ -2,7 +2,7 @@
 
 ## TESTED UNDER QEMU/OVMF
 
-NovaBoot UEFI, GOP framebuffer, xAPIC/IOAPIC/PIT, PS/2 keyboard, legacy VirtIO Block, raw FAT32, Ring 3 userspace and AP startup probe. QEMU `-smp 1`, `-smp 2`, `-smp 4` and `-smp 8` have been used with the normal userspace regression. The APs enter Nova code and idle; the scheduler still runs on the BSP only.
+NovaBoot UEFI, GOP framebuffer, xAPIC/IOAPIC/PIT, PS/2 keyboard, legacy VirtIO Block, raw FAT32, Ring 3 userspace and AP startup probe. QEMU `-smp 1`, `-smp 2`, `-smp 4` and `-smp 8` have passed the normal userspace regression and a diagnostic AP kernel-worker scheduler test. APs run pinned kernel workers and otherwise idle; user scheduling remains on the BSP.
 
 ## IMPLEMENTED BUT UNTESTED ON PHYSICAL HARDWARE
 

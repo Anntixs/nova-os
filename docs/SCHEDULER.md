@@ -10,7 +10,7 @@ When an event arrives after a consumer registers its wait but before it parks, `
 
 ## EXPERIMENTAL / PLANNED
 
-Preemption is tested on a single active CPU. Queue and IPC critical sections mask local interrupts and require redesign before SMP. There is no priority policy, CPU affinity or real-time guarantee.
+Timer preemption is tested for user threads on the BSP only. The shared ready queue now dispatches diagnostic PID 0 kernel workers to pinned APs; QEMU with four CPUs passed an atomic start-barrier and repeated cooperative-yield test on three APs. User and ordinary kernel threads remain pinned to CPU 0. There is no general CPU affinity API, AP timer preemption, priority policy or real-time guarantee.
 
 ## IMPLEMENTED
 
@@ -20,4 +20,4 @@ A QEMU self-test runs two kernel threads and asserts A1, B1, A2, B2, A3, B3. A u
 
 ## PLANNED
 
-Priorities, SMP run queues, context switching of extended CPU state, and kernel-stack guard pages. Interrupts are disabled during kernel context transfer and SYSCALL handling to avoid an IRQ overwriting an active syscall frame via TSS.RSP0.
+General SMP placement for user processes, AP timer preemption, priorities, context switching of extended CPU state, and kernel-stack guard pages. Interrupts are disabled during kernel context transfer and SYSCALL handling to avoid an IRQ overwriting an active syscall frame via TSS.RSP0.

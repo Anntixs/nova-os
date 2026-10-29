@@ -26,7 +26,8 @@ fn content(path:&str)->Result<Vec<u8>,vfs::Error> {
    let vendor=core::str::from_utf8(&cpu.vendor).unwrap_or("Unavailable");
    let brand=core::str::from_utf8(&cpu.brand).unwrap_or("Unavailable").trim_end_matches('\0').trim();
    use crate::arch::x86_64::percpu as local;
-   let mut text=format!("Vendor: {}\nBrand: {}\nFamily: {}\nModel: {}\nStepping: {}\nDiscoveredCPUs: {}\nEnteredNovaCode: {}\nSchedulerCPUs: 1\nActiveNovaCPUs: 1\n",vendor,brand,cpu.family,cpu.model,cpu.stepping,local::discovered(),local::entered());
+   let sched=crate::scheduler::kernel_online_cpus();
+   let mut text=format!("Vendor: {}\nBrand: {}\nFamily: {}\nModel: {}\nStepping: {}\nDiscoveredCPUs: {}\nEnteredNovaCode: {}\nSchedulerCPUs: {}\nUserSchedulerCPUs: 1\nActiveNovaCPUs: {}\n",vendor,brand,cpu.family,cpu.model,cpu.stepping,local::discovered(),local::entered(),sched,sched);
    for logical in 0..local::discovered().min(8) as usize {
     if let (Some(id),Some(state))=(local::apic_id(logical),local::state(logical)) {
      use core::fmt::Write;

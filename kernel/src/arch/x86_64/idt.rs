@@ -48,6 +48,7 @@ extern "C" {
     static nova_irq_0: u8;
     static nova_irq_1: u8;
     static nova_irq_tlb: u8;
+    static nova_irq_reschedule: u8;
     static nova_irq_spurious: u8;
 }
 macro_rules! stubs { ($($name:ident),*) => { extern "C" { $(static $name:u8;)* } }; }
@@ -141,6 +142,7 @@ pub fn init() {
         IDT[32] = Gate::new(&raw const nova_irq_0 as u64, 0);
         IDT[33] = Gate::new(&raw const nova_irq_1 as u64, 0);
         IDT[240] = Gate::new(&raw const nova_irq_tlb as u64, 0);
+        IDT[241] = Gate::new(&raw const nova_irq_reschedule as u64, 0);
         IDT[255] = Gate::new(&raw const nova_irq_spurious as u64, 0);
     }
     load();
