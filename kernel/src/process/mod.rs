@@ -289,7 +289,8 @@ pub fn output_byte(byte: u8) {
         // under OUTPUT_LOCK. That lock also excludes simultaneous renderers.
         if !ptr.is_null() {
             unsafe {
-                (*ptr).char(byte);
+                if byte == 8 { (*ptr).backspace(); }
+                else { (*ptr).char(byte); }
             }
         }
     });

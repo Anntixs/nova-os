@@ -60,6 +60,15 @@ def send(line):
 
 try:
     wait_for("nova:/$ ")
+    # Exercise the PS/2 -> input -> TTY -> framebuffer path, including the
+    # shell's canonical line editing, with a real QEMU Backspace key event.
+    for key in ("e", "c", "h", "x", "backspace", "o", "spc", "e", "d", "i", "t", "ret"):
+        proc.stdin.write(f"sendkey {key}\n".encode())
+        proc.stdin.flush()
+        time.sleep(0.06)
+    wait_for("edit\nnova:/$ ")
+    if "echx\x08 \x08o edit\n" not in log.read_text(errors="replace"):
+        raise AssertionError("Backspace did not erase the mistyped character")
     proc.stdin.write(f"screendump {BUILD / 'nova-boot.ppm'}\n".encode())
     proc.stdin.flush()
     commands = ("pwd", "ls /", "ls /dev", "ls /proc", "cat /proc/uptime", "sysinfo", "cpuinfo", "ps", "uptime", "dmesg", "env", "devtest", "fbtest", "cat /etc/version", "hello-c", "malloctest", "memtest", "spawntest-c", "schedtest", "threadtest", "pipetest", "msgtest", "gsattack", "orphantest", "killtest", 'args one two "hello nova"', "cd /bin", "pwd", "./pwd", 'echo "Nova works"', "badmem", "badopcode", "invalidptr", "invalidsys", "syscheck", "hello", "hello-c", "hello-c", "hello-c")
